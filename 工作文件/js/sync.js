@@ -4,26 +4,46 @@
  * - 单向为主：电脑（desk）→ 手机（phone），手机新增内容不回传，避免冲突
  * - 增量：按 updatedAt 比对，只传变化的文档本体
  * - 实时：连接保持时监听数据库写入，变更立即推送
+ * - 选择：电脑端收到手机的差额清单后，可勾选要发哪些文件
+ * - 对账：发完由手机端回报实际入库的 id，缺失自动补传，仍缺则列出文件名
+ *
+ * 消息分片：浏览器对 WebRTC 单条消息有硬上限（约 256KB），超限 dc.send 会抛异常。
+ * 带正文/识别文本的文档元信息很容易超限，所以凡超过 SAFE_MSG 的 JSON 一律按 FRAG
+ * 切开发送、对端重组 —— 否则那条 doc-begin 会被静默丢掉，整份文件随之消失。
  */
 
 (function () {
-  const PROTO = 1;
+  const PROTO = 2;
   const CHANNEL = 'workfile-sync';
   const CHUNK = 16 * 1024;            // 单个数据块 16KB
-  const MANIFEST_SLICE = 40 * 1024;   // 清单分片大小
+  const SAFE_MSG = 100 * 1024;        // 单条 JSON 消息的安全字节上限
+  const FRAG = 12 * 1024;             // 超限消息的切片长度（按字符，中文最多 3 字节/字）
   const BUFFER_HIGH = 1024 * 1024;    // 发送缓冲上限 1MB
+  const AUDIT_WAIT = 45000;           // 等对账结果的兜底时间
 
   let pc = null;
   let dc = null;
   let role = null;            // 'desk'（电脑，数据源）| 'phone'（手机，接收方）
   let connected = false;
   let busy = false;           // 正在同步
-  let incoming = {};          // 接收中的文档：id -> { meta, chunks, received, size }
-  let manifestParts = [];     // 收到的清单分片
-  let manifestTotal = 0;
+  let incoming = {};          // 接收中的文档：id -> { meta, chunks, received, size, total }
   let remoteMeta = {};        // 远端文档元信息 id -> meta
   let stats = { sent: 0, recv: 0, bytes: 0, startedAt: 0 };
   let handlers = {};
+
+  let fragBox = {};           // 分片重组：bid -> { parts:[], total }
+  let fragSeq = 0;
+
+  let expectIds = [];         // 手机端：本轮应收到哪些 id
+  let gotIds = {};            // 手机端：已成功入库的 id
+  let finishing = 0;          // 手机端：正在落库的 doc-end 数量（避免对账过早）
+  let auditSent = false;      // 手机端：本轮是否已回报过对账结果
+  let lastPlan = null;        // 电脑端：最近一次收到的差额清单
+  let sentNames = {};         // 电脑端：id -> 文件名（对账时显示用）
+  let auditRetry = 0;         // 电脑端：本轮已补传次数
+  let auditTimer = null;
+  let pendingPush = new Set();   // 同步期间电脑端产生的变更，结束后补发
+  let pendingRemove = new Set();
 
   /* ---------- 事件 ---------- */
 
@@ -45,6 +65,7 @@
 
   function reset() {
     stopWatch();
+    if (auditTimer) { clearTimeout(auditTimer); auditTimer = null; }
     try { if (dc) dc.close(); } catch (e) { /* 忽略 */ }
     try { if (pc) pc.close(); } catch (e) { /* 忽略 */ }
     dc = null;
@@ -52,9 +73,16 @@
     connected = false;
     busy = false;
     incoming = {};
-    manifestParts = [];
-    manifestTotal = 0;
     remoteMeta = {};
+    fragBox = {};
+    fragSeq = 0;
+    expectIds = [];
+    gotIds = {};
+    lastPlan = null;
+    sentNames = {};
+    auditRetry = 0;
+    pendingPush = new Set();
+    pendingRemove = new Set();
     stats = { sent: 0, recv: 0, bytes: 0, startedAt: 0 };
   }
 
@@ -116,6 +144,45 @@
     try { dc.send(JSON.stringify(obj)); return true; } catch (e) { return false; }
   }
 
+  function byteLen(str) {
+    try {
+      if (window.TextEncoder) return new TextEncoder().encode(str).length;
+    } catch (e) { /* 降级 */ }
+    return str.length * 3;
+  }
+
+  /* 大消息自动切片：返回 false 表示通道已断或发送失败，调用方必须处理 */
+  function sendLarge(obj) {
+    if (!dc || dc.readyState !== 'open') return false;
+    let json;
+    try { json = JSON.stringify(obj); } catch (e) { return false; }
+    if (byteLen(json) <= SAFE_MSG) return send(obj);
+
+    const parts = sliceString(json, FRAG);
+    const bid = ++fragSeq;
+    for (let i = 0; i < parts.length; i++) {
+      const ok = send({ t: 'frag', bid: bid, seq: i, total: parts.length, data: parts[i] });
+      if (!ok) return false;
+    }
+    return true;
+  }
+
+  function onFrag(msg) {
+    let box = fragBox[msg.bid];
+    if (!box) box = fragBox[msg.bid] = { parts: [], total: msg.total || 0, got: 0 };
+    if (box.parts[msg.seq] === undefined) box.got++;
+    box.parts[msg.seq] = msg.data;
+    box.total = msg.total || box.total;
+    if (box.got < box.total) return;
+    delete fragBox[msg.bid];
+    try {
+      handleText(JSON.parse(box.parts.join('')));
+    } catch (e) {
+      console.warn('[sync] 分片重组失败', e);
+      emit('error', { message: '接收数据时出错，请重新配对后再同步' });
+    }
+  }
+
   function sendHello() {
     send({ t: 'hello', proto: PROTO, role: 'desk', device: '电脑' });
   }
@@ -170,16 +237,32 @@
   function handleText(msg) {
     switch (msg.t) {
       case 'hello':
+        /* 两端版本必须一致：手机端拿到旧页面时协议对不上，早报错比卡住好 */
+        if (msg.proto !== PROTO) {
+          emit('error', { message: '两台设备的版本不一致（电脑 ' + msg.proto + ' / 手机 ' + PROTO + '），请在两端都刷新页面后重新配对' });
+          return;
+        }
         emit('progress', { stage: '握手完成', current: 0, total: 0, bytes: 0 });
         break;
 
-      case 'manifest-part':
-        manifestParts[msg.seq] = msg.data;
-        manifestTotal = msg.total;
+      case 'frag':
+        onFrag(msg);
         break;
 
-      case 'manifest-end':
+      case 'manifest':
         onManifest(msg);
+        break;
+
+      case 'plan':
+        onPlan(msg);
+        break;
+
+      case 'go':
+        onGo(msg);
+        break;
+
+      case 'audit':
+        onAudit(msg);
         break;
 
       case 'need':
@@ -191,7 +274,7 @@
         break;
 
       case 'doc-end':
-        finishDoc(msg);
+        startFinish(msg);
         break;
 
       case 'doc-meta-only':
@@ -215,9 +298,7 @@
         break;
 
       case 'done':
-        busy = false;
-        emit('done', { docs: msg.docs || 0, bytes: stats.bytes, from: msg.from || '' });
-        emit('state', state());
+        onRemoteDone(msg);
         break;
 
       case 'ping':
@@ -249,12 +330,30 @@
     emit('file-progress', { id: id, name: box.meta ? box.meta.name : '', received: box.received, size: box.size });
   }
 
+  /* doc-end 的处理是异步的（要落库），done 消息可能先到。
+     这里记在途数量，对账前等它们落完，否则会把刚写完的文件误报成缺失。 */
+  function startFinish(msg) {
+    finishing++;
+    Promise.resolve(finishDoc(msg)).catch(function (e) {
+      console.warn('[sync] 落库失败', e);
+    }).then(function () { finishing--; });
+  }
+
+  function onRemoteDone(msg) {
+    if (role === 'phone') { reportAudit(); return; }
+    busy = false;
+    emit('done', { docs: msg.docs || 0, bytes: stats.bytes, from: msg.from || '' });
+    emit('state', state());
+  }
+
   /* ---------- 电脑端：发清单 ---------- */
 
   async function startSync() {
     if (!connected || role !== 'desk') throw new Error('请先完成配对');
     if (busy) return { already: true };
     busy = true;
+    auditRetry = 0;
+    sentNames = {};
     stats = { sent: 0, recv: 0, bytes: 0, startedAt: Date.now() };
     emit('state', state());
     emit('progress', { stage: '正在整理文件清单', current: 0, total: 0, bytes: 0 });
@@ -277,29 +376,65 @@
       return c;
     });
 
-    const payload = JSON.stringify({ t: 'manifest', proto: PROTO, docs: metas, series: series, memos: memos, folders: folders });
-    const parts = sliceString(payload, MANIFEST_SLICE);
-    for (let i = 0; i < parts.length; i++) {
-      send({ t: 'manifest-part', seq: i, total: parts.length, data: parts[i] });
-      if (i % 10 === 0) await sleep(0);
+    const ok = sendLarge({ t: 'manifest', proto: PROTO, docs: metas, series: series, memos: memos, folders: folders });
+    if (!ok) {
+      busy = false;
+      emit('error', { message: '清单发送失败，连接可能已断开，请重新配对' });
+      emit('state', state());
+      return;
     }
-    send({ t: 'manifest-end', total: parts.length, count: metas.length });
-    emit('progress', { stage: '等待手机确认需要哪些文件', current: 0, total: metas.length, bytes: 0 });
+    emit('progress', { stage: '等待手机端核对差额（共 ' + metas.length + ' 份）', current: 0, total: metas.length, bytes: 0 });
   }
 
-  async function sendDocs(ids) {
+  /* 手机端算完差额后回报：电脑端据此弹出选择面板 */
+  function onPlan(msg) {
+    lastPlan = { need: msg.need || [], total: msg.total || 0, metaOnly: msg.metaOnly || 0, sizes: msg.sizes || {} };
+    emit('plan', lastPlan);
+    /* 手机端没有任何缺失时不必让用户空等，直接放行 */
+    if (!lastPlan.need.length) {
+      sendSelected([]).catch(function () { /* 连接已断 */ });
+      return;
+    }
+    setStage();
+  }
+
+  function setStage() {
+    const total = lastPlan ? lastPlan.need.length : 0;
+    emit('progress', { stage: '请勾选要发到手机的文件（' + total + ' 份待选）', current: 0, total: total, bytes: 0 });
+  }
+
+  /* 电脑端：用户勾选完毕后开始发送 */
+  async function sendSelected(ids) {
+    if (!connected || role !== 'desk') throw new Error('请先完成配对');
+    const list = (ids || []).filter(function (x) { return x != null; });
+    auditRetry = 0;
+    busy = true;
+    emit('state', state());
+    /* 先告诉手机端「这一轮会收到哪些 id」，手机端据此建预期清单；
+       有序通道保证 go 一定先于任何 doc-begin 到达 */
+    send({ t: 'go', ids: list });
+    await sendDocs(list, { keepBusy: true });
+  }
+
+  async function sendDocs(ids, opts) {
+    opts = opts || {};
     if (!ids.length) {
       send({ t: 'done', docs: 0, from: 'desk' });
-      busy = false;
-      emit('done', { docs: 0, bytes: 0, from: 'desk' });
-      emit('state', state());
+      if (opts.keepBusy) armAudit();
+      else {
+        busy = false;
+        emit('done', { docs: 0, bytes: 0, from: 'desk' });
+        emit('state', state());
+      }
       return;
     }
     const total = ids.length;
     let doneCount = 0;
+    const okIds = [];
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       const name = await sendOneDoc(id);
+      if (name) { sentNames[id] = name; okIds.push(id); }
       doneCount++;
       emit('progress', {
         stage: '发送文件',
@@ -310,10 +445,57 @@
       });
     }
     send({ t: 'done', docs: total, from: 'desk' });
+    /* 只把真正发出去的记入快照；失败的留给对账补传，不能被误标成「已同步」 */
+    await syncSnapshotFor(okIds);
+    if (opts.keepBusy) {
+      armAudit();
+      return;
+    }
     busy = false;
-    /* 只把已发送的文档记入快照，同步期间新增的仍会被实时推送捕获 */
-    await syncSnapshotFor(ids);
     emit('done', { docs: total, bytes: stats.bytes, from: 'desk' });
+    emit('state', state());
+  }
+
+  /* 对账兜底：手机端迟迟不回报结果时不要让界面永远卡在「同步中」 */
+  function armAudit() {
+    if (auditTimer) clearTimeout(auditTimer);
+    auditTimer = setTimeout(function () {
+      auditTimer = null;
+      if (!busy) return;
+      busy = false;
+      emit('audit', { ok: false, timeout: true, missing: [], names: [], expect: 0, got: 0 });
+      emit('done', { docs: Object.keys(sentNames).length, bytes: stats.bytes, from: 'desk' });
+      emit('state', state());
+    }, AUDIT_WAIT);
+  }
+
+  /* 电脑端：收到手机端的对账结果 */
+  async function onAudit(msg) {
+    if (auditTimer) { clearTimeout(auditTimer); auditTimer = null; }
+    const missing = (msg.missing || []).filter(function (id) { return id != null; });
+
+    if (missing.length && auditRetry < 2) {
+      auditRetry++;
+      emit('progress', {
+        stage: '对账发现 ' + missing.length + ' 份未到达，正在补传（第 ' + auditRetry + ' 次）',
+        current: 0, total: missing.length, bytes: stats.bytes
+      });
+      send({ t: 'go', ids: missing });
+      await sendDocs(missing, { keepBusy: true });
+      return;
+    }
+
+    busy = false;
+    const names = missing.map(function (id) { return sentNames[id] || ('#' + id); });
+    emit('audit', {
+      ok: !missing.length,
+      missing: missing,
+      names: names,
+      expect: msg.expect || 0,
+      got: msg.got || 0
+    });
+    await flushPending();
+    emit('done', { docs: msg.got || Object.keys(sentNames).length, bytes: stats.bytes, from: 'desk' });
     emit('state', state());
   }
 
@@ -335,12 +517,17 @@
       return '';
     }
     if (!doc.blob) {
-      send({ t: 'doc-meta-only', id: id, meta: stripBlob(doc) });
+      /* 元信息可能很长，必须走分片，否则 dc.send 抛错后这条记录会凭空消失 */
+      if (!sendLarge({ t: 'doc-meta-only', id: id, meta: stripBlob(doc) })) return '';
       return doc.name;
     }
     const buf = await doc.blob.arrayBuffer();
     const total = Math.ceil(buf.byteLength / CHUNK);
-    send({ t: 'doc-begin', id: id, size: buf.byteLength, total: total, meta: stripBlob(doc) });
+    /* doc-begin 带整份正文与识别文本，是最容易超限的一条消息 */
+    if (!sendLarge({ t: 'doc-begin', id: id, size: buf.byteLength, total: total, meta: stripBlob(doc) })) {
+      emit('progress', { stage: '「' + doc.name + '」头部信息发送失败，将在对账后重试', current: 0, total: 0, bytes: stats.bytes });
+      return '';
+    }
     for (let i = 0; i < total; i++) {
       await waitBuffer();
       const piece = buf.slice(i * CHUNK, Math.min(buf.byteLength, (i + 1) * CHUNK));
@@ -349,7 +536,11 @@
       dv.setUint32(0, id, true);
       dv.setUint32(4, i, true);
       new Uint8Array(frame, 8).set(new Uint8Array(piece));
-      dc.send(frame);
+      try {
+        dc.send(frame);
+      } catch (e) {
+        return '';   /* 通道已断，交给对账与重连 */
+      }
       stats.sent++;
       stats.bytes += piece.byteLength;
     }
@@ -382,15 +573,12 @@
 
   /* ---------- 手机端：收清单、要文件、落库 ---------- */
 
-  async function onManifest(msg) {
-    const json = manifestParts.join('');
-    manifestParts = [];
-    let mf;
-    try { mf = JSON.parse(json); } catch (e) {
+  async function onManifest(mf) {
+    if (!mf || !Array.isArray(mf.docs)) {
       emit('error', { message: '清单解析失败，请重新配对' });
       return;
     }
-    const docs = mf.docs || [];
+    const docs = mf.docs;
     remoteMeta = {};
     docs.forEach(function (d) { remoteMeta[d.id] = d; });
 
@@ -425,23 +613,82 @@
       else metaOnly.push(d);
     });
 
-    /* 无本体的记录类：直接写入 */
+    /* 无本体的记录类：直接写入（这部分同样计入差额头，之前完全不参与统计） */
+    let metaOnlyOk = 0;
     for (let i = 0; i < metaOnly.length; i++) {
       const d = Object.assign({}, metaOnly[i]);
       delete d.hasBlob;
       const local = byId[d.id] || byOrigin[d.id];
       if (local) d.id = local.id;
       else if (byId[d.id]) { d.originId = d.id; delete d.id; }
-      try { await DB.db.documents.put(d); } catch (e) { /* 跳过 */ }
+      try { await DB.db.documents.put(d); metaOnlyOk++; } catch (e) { /* 跳过 */ }
     }
-    if (metaOnly.length) emit('remote-doc', { count: metaOnly.length });
+    if (metaOnlyOk) emit('remote-doc', { count: metaOnlyOk });
 
-    emit('progress', { stage: '需要接收 ' + need.length + ' 份文件', current: 0, total: need.length, bytes: 0 });
-    send({ t: 'need', ids: need });
-    if (!need.length) {
+    /* 不再自行开收：把差额头回报给电脑端，由电脑端勾选后发「go」 */
+    gotIds = {};
+    expectIds = [];
+    auditSent = false;
+    busy = true;
+    const sent = sendLarge({ t: 'plan', need: need, total: docs.length, metaOnly: metaOnlyOk });
+    if (!sent) {
       busy = false;
-      emit('done', { docs: 0, bytes: 0, from: 'phone' });
+      emit('error', { message: '差额清单回传失败，连接可能已断开，请重新配对' });
+      emit('state', state());
+      return;
     }
+    emit('progress', {
+      stage: '核对完成：手机端缺 ' + need.length + ' 份，等待电脑端选择',
+      current: 0, total: need.length, bytes: 0
+    });
+    emit('state', state());
+  }
+
+  /* 手机端：电脑端已选好，开始接收这一批 */
+  function onGo(msg) {
+    const ids = Array.isArray(msg.ids) ? msg.ids.filter(function (x) { return x != null; }) : [];
+    if (!ids.length) {
+      /* 电脑端一份都没选，直接收尾 */
+      reportAudit();
+      return;
+    }
+    ids.forEach(function (id) {
+      if (expectIds.indexOf(id) < 0) expectIds.push(id);
+    });
+    auditSent = false;
+    emit('progress', {
+      stage: '开始接收 ' + ids.length + ' 份',
+      current: Object.keys(gotIds).length, total: expectIds.length, bytes: stats.bytes
+    });
+  }
+
+  async function reportAudit() {
+    if (auditSent) return;
+    auditSent = true;
+    /* 等最后几个 doc-end 落库完成，再算到底缺哪些 */
+    let guard = 0;
+    while (finishing > 0 && guard++ < 250) await sleep(20);
+
+    const missing = expectIds.filter(function (id) { return !gotIds[id]; });
+    const got = Object.keys(gotIds).length;
+    const sent = sendLarge({ t: 'audit', missing: missing, expect: expectIds.length, got: got });
+    if (!sent) {
+      busy = false;
+      emit('error', { message: '对账结果回传失败，连接可能已断开' });
+      emit('state', state());
+      return;
+    }
+    if (missing.length) {
+      emit('progress', {
+        stage: '有 ' + missing.length + ' 份未写入，正在等电脑端补传',
+        current: got, total: expectIds.length, bytes: stats.bytes
+      });
+      return;
+    }
+    busy = false;
+    expectIds = [];
+    emit('done', { docs: got, bytes: stats.bytes, from: 'phone' });
+    emit('state', state());
   }
 
   async function finishDoc(msg) {
@@ -452,6 +699,23 @@
 
     const meta = Object.assign({}, box.meta);
     delete meta.hasBlob;
+
+    /* 完整性校验：块的 seq 有缺口、或累计字节与声明大小不符，都算没收到。
+       旧代码直接 new Blob(box.chunks)，缺块也能「成功」，落库的是一份残文件。 */
+    let gotCount = 0;
+    let gotBytes = 0;
+    for (let i = 0; i < box.chunks.length; i++) {
+      if (box.chunks[i]) { gotCount++; gotBytes += box.chunks[i].byteLength; }
+    }
+    const expectCount = box.total || 0;
+    const expectBytes = box.size || 0;
+    if (gotCount !== expectCount || gotBytes !== expectBytes) {
+      emit('error', {
+        message: '「' + (meta.name || '文件') + '」传输不完整（' + gotBytes + '/' + expectBytes + ' 字节），已请求补传'
+      });
+      return;
+    }
+
     const blob = new Blob(box.chunks, { type: 'application/octet-stream' });
 
     const locals = await DB.allDocuments();
@@ -474,6 +738,7 @@
     meta.size = blob.size;
     try {
       await DB.db.documents.put(meta);
+      gotIds[msg.id] = meta.name || '';
       stats.bytes += blob.size;
       emit('file-done', { name: meta.name });
       emit('remote-doc', { count: 1, name: meta.name });
@@ -606,9 +871,45 @@
     return changed.length + removed.length;
   }
 
+  /* 比对数据库与快照，返回本轮新增/修改/删除的 id */
+  async function scanChanges() {
+    if (!snapshot) return null;
+    let docs;
+    try { docs = await DB.db.documents.toArray(); } catch (e) { return null; }
+    const next = new Map();
+    const changed = [];
+    const removed = [];
+    docs.forEach(function (d) {
+      const stamp = d.updatedAt || d.createdAt || 0;
+      next.set(d.id, stamp);
+      const prev = snapshot.get(d.id);
+      if (prev === undefined || stamp > prev) changed.push(d.id);
+    });
+    snapshot.forEach(function (v, id) { if (!next.has(id)) removed.push(id); });
+    snapshot = next;
+    return { changed: changed, removed: removed };
+  }
+
+  /* 同步期间攒下的变更，本轮结束后补发，否则会被快照吞掉、永久丢失 */
+  async function flushPending() {
+    if (!pendingPush.size && !pendingRemove.size) return;
+    const pushIds = Array.from(pendingPush);
+    const removeIds = Array.from(pendingRemove);
+    pendingPush.clear();
+    pendingRemove.clear();
+    try {
+      for (let i = 0; i < pushIds.length; i++) await sendOneDoc(pushIds[i]);
+      for (let i = 0; i < removeIds.length; i++) send({ t: 'del', id: removeIds[i] });
+      emit('live', { count: pushIds.length + removeIds.length });
+      emit('progress', {
+        stage: '已补发同步期间产生的 ' + (pushIds.length + removeIds.length) + ' 项变更',
+        current: 0, total: 0, bytes: stats.bytes
+      });
+    } catch (e) { /* 连接已断，忽略 */ }
+  }
+
   async function tickWatch() {
     if (!connected || role !== 'desk' || !snapshot) return;
-    if (busy) return;   /* 全量同步进行中先不插队 */
 
     const memoCount = await flushMemos();
     if (memoCount) {
@@ -627,28 +928,24 @@
       }
     } catch (e) { /* 旧库无此表 */ }
 
-    let docs;
-    try { docs = await DB.db.documents.toArray(); } catch (e) { return; }
+    const sc = await scanChanges();
+    if (!sc) return;
 
-    const next = new Map();
-    const changed = [];
-    docs.forEach(function (d) {
-      const stamp = d.updatedAt || d.createdAt || 0;
-      next.set(d.id, stamp);
-      const prev = snapshot.get(d.id);
-      if (prev === undefined || stamp > prev) changed.push(d.id);
-    });
-    const removed = [];
-    snapshot.forEach(function (v, id) { if (!next.has(id)) removed.push(id); });
-    snapshot = next;
-    if (!changed.length && !removed.length) return;
+    /* 全量同步进行中：先记下来，等这轮结束再补发（旧代码直接 return，变更就永久丢了） */
+    if (busy) {
+      sc.changed.forEach(function (id) { pendingPush.add(id); });
+      sc.removed.forEach(function (id) { pendingRemove.add(id); });
+      return;
+    }
+
+    if (!sc.changed.length && !sc.removed.length) return;
 
     try {
-      for (let i = 0; i < changed.length; i++) await sendOneDoc(changed[i]);
-      for (let i = 0; i < removed.length; i++) send({ t: 'del', id: removed[i] });
-      emit('live', { count: changed.length + removed.length });
+      for (let i = 0; i < sc.changed.length; i++) await sendOneDoc(sc.changed[i]);
+      for (let i = 0; i < sc.removed.length; i++) send({ t: 'del', id: sc.removed[i] });
+      emit('live', { count: sc.changed.length + sc.removed.length });
       emit('progress', {
-        stage: '已推送 ' + (changed.length + removed.length) + ' 项变更',
+        stage: '已推送 ' + (sc.changed.length + sc.removed.length) + ' 项变更',
         current: 0, total: 0, bytes: stats.bytes
       });
     } catch (e) { /* 连接已断，忽略 */ }
@@ -681,6 +978,8 @@
     acceptOffer: acceptOffer,
     acceptAnswer: acceptAnswer,
     startSync: startSync,
+    sendSelected: sendSelected,
+    plan: function () { return lastPlan; },
     disconnect: disconnect,
     isSupported: function () { return !!(window.RTCPeerConnection && window.RTCPeerConnection.prototype.createDataChannel); }
   };

@@ -5,7 +5,7 @@
 
 (function () {
   let role = 'desk';          // desk（电脑，发送方）| phone（手机，接收方）
-  let phase = 'idle';         // idle | offer | answer | connected | syncing | done | error
+  let phase = 'idle';         // idle | offer | answer | connected | select | syncing | done | error
   let offerSdp = '';
   let answerSdp = '';
   let message = '';
@@ -15,6 +15,9 @@
   let lastError = '';
   let bodyEl = null;
   let autoStarted = false;
+  let pickRows = [];          // 电脑端：手机缺哪些（id / name / size）
+  let picked = new Set();     // 电脑端：勾选中的 id
+  let auditInfo = null;       // 对账结果
 
   /* ---------- 二维码 ---------- */
 
@@ -356,6 +359,7 @@
       offer: ['等待手机扫码', 'warn'],
       answer: ['等待电脑读取', 'warn'],
       connected: ['已连接', 'ok'],
+      select: ['等待选择文件', 'warn'],
       syncing: ['同步中', 'ok'],
       done: ['同步完成', 'ok'],
       error: ['出现问题', 'err']
@@ -369,6 +373,60 @@
       '<summary>电脑没有摄像头？粘贴返回码</summary>' +
       '<textarea class="input" data-answer-text rows="3" placeholder="把手机上的返回码文本粘贴到这里（以 z 或 p 开头的一长串字符）"></textarea>' +
       '<button class="btn primary block" data-answer-use type="button">用这段返回码连接</button>' +
+      '</details>';
+  }
+
+  function pickRowHtml(r) {
+    return '<label class="pick-row">' +
+      '<input type="checkbox" data-pick-id="' + r.id + '"' + (picked.has(r.id) ? ' checked' : '') + '>' +
+      '<span class="pick-name">' + UI.esc(r.name) + '</span>' +
+      '<span class="pick-size">' + UI.fmtSize(r.size || 0) + '</span>' +
+      '</label>';
+  }
+
+  function pickPanelHtml() {
+    const rows = pickRows || [];
+    if (!rows.length) {
+      return '<div class="notice info">手机端已经是最新的，没有需要发送的文件。</div>' +
+        '<button class="btn primary block" data-sync-again type="button">重新核对一次</button>' +
+        '<button class="btn block" data-sync-reset type="button">断开连接</button>';
+    }
+    return '<div class="notice info">手机端比这台电脑少 <b>' + rows.length + '</b> 份。' +
+      '勾选要发送的文件，默认全选。</div>' +
+      '<div class="pick-tools">' +
+      '<button class="btn pick-tool" data-pick-all type="button">全选</button>' +
+      '<button class="btn pick-tool" data-pick-none type="button">全不选</button>' +
+      '<span class="pick-count" data-pick-count>已选 ' + picked.size + ' 份</span>' +
+      '</div>' +
+      '<div class="pick-list">' + rows.map(pickRowHtml).join('') + '</div>' +
+      '<button class="btn primary block" data-send-picked type="button">发送选中的 ' + picked.size + ' 份</button>' +
+      '<button class="btn block" data-sync-reset type="button">断开连接</button>';
+  }
+
+  /* 对账结果：正常情况下只说一句「都到齐了」，出问题时把文件名列出来 */
+  function auditHtml() {
+    if (!auditInfo) return '';
+    if (auditInfo.timeout) {
+      return '<div class="notice warn">没等到手机端的对账回执（可能切到后台或连接已断）。' +
+        '建议点「再同步一次」；如果还是不行，可以改用「导出备份 → 手机导入」。</div>';
+    }
+    if (auditInfo.ok) {
+      return '<div class="notice info">已对账：手机端确认收到 ' + (auditInfo.got || 0) + ' 份，与发送数一致。</div>';
+    }
+    const names = (auditInfo.names || []).slice(0, 8);
+    return '<div class="notice warn">有 ' + (auditInfo.missing || []).length + ' 份没送达：' +
+      UI.esc(names.join('、')) + ((auditInfo.names || []).length > 8 ? ' 等' : '') +
+      '。可点「再同步一次」重试；文件较大时建议改用「导出备份 → 手机导入」，更稳。</div>';
+  }
+
+  /* 大批量/大文件的兜底通道：直连怕手机切后台，zip 中转更稳 */
+  function bulkHintHtml() {
+    return '<details class="sync-manual">' +
+      '<summary>文件很多、或单个文件很大？换一条更稳的路</summary>' +
+      '<p class="inline-hint">直连传输全靠手机保持前台，一旦切到后台就可能中断。' +
+      '文件多或体积大时，用「设置 → 备份与恢复 → 导出备份」在电脑上生成一个 zip，' +
+      '通过微信/数据线传到手机，再在手机端「恢复备份」里选「合并」导入即可。' +
+      '导入按电脑端的版本为准，份数也能精确对上。</p>' +
       '</details>';
   }
 
@@ -406,6 +464,8 @@
         '<p class="inline-hint" style="text-align:center">电脑没有摄像头时：保存图片或复制返回码，用微信发到电脑，' +
         '在电脑端「读取手机返回码」里选图片或粘贴即可</p>' +
         '<button class="btn block" data-sync-reset type="button">取消</button>';
+    } else if (phase === 'select') {
+      main = pickPanelHtml();
     } else {
       const stats = st.stats || {};
       main =
@@ -417,6 +477,7 @@
         '<span>已同步 ' + syncedCount + ' 份</span>' +
         '<span>传输 ' + UI.fmtSize(stats.bytes || 0) + '</span>' +
         '</div>' +
+        (phase === 'done' ? auditHtml() : '') +
         (phase === 'done'
           ? '<button class="btn primary block" data-sync-again type="button">再同步一次</button>'
           : '') +
@@ -428,6 +489,7 @@
       '<span class="sync-role-tag">' + (role === 'desk' ? '电脑端' : '手机端') + '</span>' +
       '</div>' +
       main +
+      ((phase === 'select' || phase === 'done') ? bulkHintHtml() : '') +
       '<div class="notice info" style="margin-top:6px">' +
       '数据只在两台设备之间直连传输，不经过任何服务器，也不需要登录。' +
       '建议两端连接同一个 WiFi；手机切到后台时连接会断开，回到前台重新配对即可。' +
@@ -493,6 +555,9 @@
         lastError = '';
         percent = 0;
         progressText = '';
+        pickRows = [];
+        picked = new Set();
+        auditInfo = null;
         setPhase('idle');
       };
     }
@@ -533,6 +598,7 @@
         try {
           percent = 0;
           syncedCount = 0;
+          auditInfo = null;
           setPhase('syncing', '重新同步中');
           await window.Sync.startSync();
         } catch (e) {
@@ -540,6 +606,62 @@
           setPhase('error');
         }
       };
+    }
+
+    /* ---- 选择面板 ---- */
+    const listEl = b.querySelector('.pick-list');
+    if (listEl) {
+      listEl.addEventListener('change', function (e) {
+        const cb = e.target && e.target.closest ? e.target.closest('[data-pick-id]') : null;
+        if (!cb) return;
+        const id = Number(cb.getAttribute('data-pick-id'));
+        if (cb.checked) picked.add(id);
+        else picked.delete(id);
+        paintPick();
+      });
+    }
+    const allBtn = b.querySelector('[data-pick-all]');
+    if (allBtn) {
+      allBtn.onclick = function () {
+        pickRows.forEach(function (r) { picked.add(r.id); });
+        render();
+      };
+    }
+    const noneBtn = b.querySelector('[data-pick-none]');
+    if (noneBtn) {
+      noneBtn.onclick = function () {
+        picked.clear();
+        render();
+      };
+    }
+    const sendBtn = b.querySelector('[data-send-picked]');
+    if (sendBtn) {
+      sendBtn.onclick = async function () {
+        const ids = Array.from(picked);
+        if (!ids.length) { UI.toast('至少勾选一份再发送', 'err'); return; }
+        auditInfo = null;
+        percent = 0;
+        syncedCount = 0;
+        setPhase('syncing', '正在发送选中的文件');
+        try {
+          await window.Sync.sendSelected(ids);
+        } catch (e) {
+          lastError = (e && e.message) || '发送失败';
+          setPhase('error');
+        }
+      };
+    }
+  }
+
+  /* 只更新勾选计数，不整块重绘（避免列表跳动、丢焦点） */
+  function paintPick() {
+    if (!bodyEl) return;
+    const cnt = bodyEl.querySelector('[data-pick-count]');
+    if (cnt) cnt.textContent = '已选 ' + picked.size + ' 份';
+    const btn = bodyEl.querySelector('[data-send-picked]');
+    if (btn) {
+      btn.textContent = '发送选中的 ' + picked.size + ' 份';
+      btn.disabled = picked.size === 0;
     }
   }
 
@@ -581,8 +703,12 @@
   function openPanel(opts) {
     opts = opts || {};
     const st = window.Sync ? window.Sync.state() : { connected: false };
-    /* 已连接时重开面板直接显示连接态，避免误判为未配对 */
-    phase = st.connected ? (st.busy ? 'syncing' : 'connected') : 'idle';
+    /* 已连接时重开面板直接显示连接态；select / done 这类「有未完成操作」的阶段要保留，
+       否则关一下面板再打开，勾选列表就没了 */
+    if (!st.connected) phase = 'idle';
+    else if (phase === 'idle' || phase === 'offer' || phase === 'answer') {
+      phase = st.busy ? 'syncing' : 'connected';
+    }
     percent = st.connected ? percent : 0;
     progressText = st.connected ? (progressText || '已连接') : '';
     syncedCount = st.connected ? syncedCount : 0;
@@ -600,26 +726,65 @@
         window.Sync.__bound = true;
 
         window.Sync.on('state', function (s) {
-          if (s.connected && (phase === 'offer' || phase === 'answer' || phase === 'connected')) {
-            setPhase('connected', '已连接');
-            if (role === 'desk' && !autoStarted) {
-              autoStarted = true;
-              setTimeout(function () {
-                setPhase('syncing', '正在同步');
-                window.Sync.startSync().catch(function (e) {
-                  lastError = (e && e.message) || '同步失败';
-                  setPhase('error');
-                });
-              }, 400);
+          if (!s.connected) {
+            /* 传输中掉线：别让界面停在一个永远不动的进度条上 */
+            if (phase === 'syncing' || phase === 'select') {
+              progressText = '连接已断开';
+              lastError = '连接已断开，请重新配对';
+              setPhase('error');
             }
+            return;
           }
-          if (!s.connected && phase === 'syncing') {
-            progressText = '连接已断开';
-            render();
+          if (phase === 'offer' || phase === 'answer' || phase === 'idle') {
+            setPhase('connected', '已连接');
+          }
+          if (role === 'desk' && !autoStarted) {
+            autoStarted = true;
+            setTimeout(function () {
+              /* 勾选面板可能已经先弹出来了，别再改回去 */
+              if (phase !== 'connected' || !window.Sync.state().connected) return;
+              setPhase('syncing', '正在同步');
+              window.Sync.startSync().catch(function (e) {
+                lastError = (e && e.message) || '同步失败';
+                setPhase('error');
+              });
+            }, 400);
           }
         });
 
         window.Sync.on('progress', function (p) { paintProgress(p); });
+
+        /* 电脑端：手机回报差额 → 弹出勾选面板 */
+        window.Sync.on('plan', async function (p) {
+          const need = (p && p.need) || [];
+          let rows = [];
+          try {
+            const docs = await DB.allDocuments();
+            const map = new Map();
+            docs.forEach(function (d) { map.set(d.id, d); });
+            rows = need.map(function (id) {
+              const d = map.get(id);
+              return { id: id, name: d ? (d.name || '未命名') : ('未命名 #' + id), size: d ? (d.size || 0) : 0 };
+            });
+          } catch (e) {
+            rows = need.map(function (id) { return { id: id, name: '未命名 #' + id, size: 0 }; });
+          }
+          rows.sort(function (a, b) { return String(a.name).localeCompare(String(b.name), 'zh'); });
+          /* 差额为空时电脑端会自动收尾，这一轮可能已经结束了，别再插一脚 */
+          if (!window.Sync.state().busy) return;
+          pickRows = rows;
+          picked = new Set(rows.map(function (r) { return r.id; }));
+          auditInfo = null;
+          percent = 0;
+          syncedCount = 0;
+          setPhase('select', '手机端缺 ' + rows.length + ' 份');
+        });
+
+        /* 电脑端：对账结果 */
+        window.Sync.on('audit', function (a) {
+          auditInfo = a || null;
+          if (phase === 'done') render();
+        });
 
         window.Sync.on('file-done', function (d) {
           syncedCount++;
@@ -641,7 +806,10 @@
           progressText = '同步完成';
           setPhase('done', '同步完成');
           if (window.App && window.App.refresh) window.App.refresh();
-          UI.toast('同步完成，共 ' + syncedCount + ' 份', 'ok');
+          const bad = auditInfo && !auditInfo.ok && !auditInfo.timeout ? (auditInfo.missing || []).length : 0;
+          if (bad) UI.toast('同步完成，但有 ' + bad + ' 份没送达，详情见面板', 'err');
+          else if (auditInfo && auditInfo.timeout) UI.toast('同步结束，但没收到手机端回执', 'warn');
+          else UI.toast('同步完成，共 ' + syncedCount + ' 份', 'ok');
         });
 
         window.Sync.on('live', function () {

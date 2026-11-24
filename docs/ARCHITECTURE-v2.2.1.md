@@ -182,12 +182,20 @@ db.version(3).stores({           // v3 仅新增表，不改变既有表结构
 | 阶段 | 机制 |
 | --- | --- |
 | 配对 | WebRTC DataChannel，`iceServers: []`（只走 host candidate，同 WiFi 直连）；SDP 用 `deflate-raw` 压缩 + base64（约 633 字符）以塞进二维码；双向可扫 |
-| 传输 | 16KB 二进制分块（8 字节头：id + seq），40KB 清单分片，`bufferedAmount` 背压 |
+| 传输 | 16KB 二进制分块（8 字节头：id + seq），`bufferedAmount` 背压 |
+| 大消息 | 浏览器对单条消息有硬上限（Chrome `maxMessageSize = 262144`）。凡 JSON 超过 100KB 就用 `sendLarge()` 切成 12KB 片（`frag` 消息），对端重组后再派发；清单、`doc-begin`、`doc-meta-only`、`memo`、`folders`、`plan`、`audit` 都走这条路 |
 | 增量 | 清单携带每条 `updatedAt + originId`，只传新增/更新 |
-| 实时 | 电脑端 1.5s 快照轮询（`documents` / `memos` 的 id→updatedAt），有变化即推；备忘录增删改单独 `memo` / `memo-del` 消息 |
+| 选择 | 手机端算出差额头回报 `plan`；电脑端列出文件名与大小供勾选，`go` 下发本轮要发的 id 集合（有序通道保证 `go` 先于任何 `doc-begin`） |
+| 对账 | 手机端收完回报 `audit {missing, expect, got}`；电脑端缺失自动补传（最多 2 轮），仍缺则列出文件名；45s 无回执按超时处理 |
+| 完整性 | `finishDoc` 校验块数 = `total` 且累计字节 = `size`，不符不落库、转交补传 |
+| 实时 | 电脑端 1.5s 快照轮询（`documents` / `memos` 的 id→updatedAt），有变化即推；备忘录增删改单独 `memo` / `memo-del` 消息。同步进行中产生的变更先攒进 `pendingPush`，本轮结束后补发 |
 | 写入 | 手机端 `put` 到本地库，id 冲突保留双方数据（不覆盖已有的不同 id 记录） |
 
-消息类型：`hello / pong / manifest / manifest-part / manifest-end / need / doc-begin / doc-meta-only / doc-end / del / memo / memo-del / done`。
+消息类型：`hello / pong / frag / manifest / plan / go / audit / need / doc-begin / doc-meta-only / doc-end / del / memo / memo-del / folders / done`。
+
+PROTO = 2。`hello` 携带协议版本，两端不一致时直接报错提示刷新，避免旧页面卡死。
+
+**大批量兜底**：直连全程依赖手机保持前台，文件多或单文件大时改用「导出备份 zip → 手机端合并导入」，那条路径可断点、可精确核对 `manifest.json` 里的 `fileCount`。
 
 **扫码入口**支持三种：相机（触屏设备默认）、选择二维码图片、粘贴截图（Ctrl+V）或粘贴返回码文本；整屏截图用 2x/3x 网格切片解码；二维码静区 4 个模块。
 
