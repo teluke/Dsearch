@@ -2091,9 +2091,108 @@
     };
   }
 
+  /* ---------- 压缩包：导入时自动解包（zip 本体不入库） ---------- */
+
+  const ZIP_MAX_ENTRY = 40 * 1024 * 1024;   /* 单个成员上限 */
+  const ZIP_MAX_TOTAL = 300 * 1024 * 1024;  /* 解压后总量上限 */
+  const ZIP_MAX_FILES = 200;                /* 最多展开多少个文件 */
+  const ZIP_SKIP_EXT = ['exe', 'dll', 'msi', 'bat', 'cmd', 'sh', 'app', 'apk', 'dmg', 'iso', 'scr', 'jar'];
+
+  function isJunkEntry(path) {
+    return /(^|\/)__MACOSX\//i.test(path) || /(^|\/)\._/.test(path) ||
+      /(^|\/)\.DS_Store$/i.test(path) || /(^|\/)Thumbs\.db$/i.test(path) ||
+      /~\$/.test(path) || /(^|\/)\.git\//i.test(path);
+  }
+
+  function entryBaseName(path) {
+    const parts = String(path).split('/');
+    return parts[parts.length - 1] || String(path);
+  }
+
+  function mimeOfName(name) {
+    const map = {
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      pdf: 'application/pdf',
+      txt: 'text/plain', md: 'text/markdown', log: 'text/plain', csv: 'text/csv',
+      doc: 'application/msword', xls: 'application/vnd.ms-excel',
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+      webp: 'image/webp', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff'
+    };
+    return map[Parser.extOf(name)] || 'application/octet-stream';
+  }
+
+  /* 把列表里的 .zip 展开成内部文件，其余文件原样保留 */
+  async function expandArchives(list) {
+    const out = [];
+    const notes = [];
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i];
+      if (Parser.extOf(file.name) !== 'zip') { out.push(file); continue; }
+      if (!window.JSZip) { notes.push(file.name + '：缺少解压组件，已跳过'); continue; }
+      UI.progress(true, 15, '正在解压「' + file.name + '」');
+      try {
+        const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+        /* 应用自己的备份包有 data.json + manifest.json，不能当普通压缩包摊开 */
+        if (zip.file('data.json') && zip.file('manifest.json')) {
+          notes.push(file.name + ' 是本应用的备份包，请到「设置 → 备份与恢复」里导入');
+          continue;
+        }
+        const names = Object.keys(zip.files).filter(function (p) {
+          return !zip.files[p].dir && !isJunkEntry(p);
+        });
+        let picked = 0;
+        let skipped = 0;
+        let bytes = 0;
+        const used = {};
+        for (let j = 0; j < names.length; j++) {
+          const path = names[j];
+          if (picked >= ZIP_MAX_FILES || ZIP_SKIP_EXT.indexOf(Parser.extOf(path)) >= 0) { skipped++; continue; }
+          let blob;
+          try { blob = await zip.files[path].async('blob'); } catch (e) { skipped++; continue; }
+          if (!blob || !blob.size || blob.size > ZIP_MAX_ENTRY || bytes + blob.size > ZIP_MAX_TOTAL) {
+            skipped++;
+            continue;
+          }
+          bytes += blob.size;
+          /* 不同目录下可能有同名文件，重名时补序号，避免互相覆盖 */
+          let name = entryBaseName(path);
+          if (used[name]) {
+            used[name] += 1;
+            const dot = name.lastIndexOf('.');
+            name = (dot > 0 ? name.slice(0, dot) : name) + ' (' + used[name] + ')' + (dot > 0 ? name.slice(dot) : '');
+          } else {
+            used[name] = 1;
+          }
+          out.push(new File([blob], name, { type: mimeOfName(name) }));
+          picked++;
+          if (j % 8 === 0) UI.progress(true, 15 + Math.round(j / names.length * 75), '正在解压 ' + picked + ' 个文件…');
+        }
+        if (picked) {
+          notes.push(file.name + ' 解出 ' + picked + ' 个文件' + (skipped ? '（跳过 ' + skipped + ' 个：空文件、超体积或可执行文件）' : ''));
+        } else {
+          notes.push(file.name + ' 内没有可归档的文件');
+        }
+      } catch (e) {
+        notes.push(file.name + ' 无法解压（' + ((e && e.message) || '文件可能已加密或损坏') + '）');
+      }
+    }
+    UI.progress(false);
+    return { files: out, notes: notes };
+  }
+
   async function handleFiles(files) {
-    const list = Array.prototype.slice.call(files || []);
+    let list = Array.prototype.slice.call(files || []);
     if (!list.length) return;
+
+    /* 压缩包在导入阶段就摊开，不把 zip 本体存进库 */
+    const hasZip = list.some(function (f) { return Parser.extOf(f.name) === 'zip'; });
+    if (hasZip) {
+      const res = await expandArchives(list);
+      if (res.notes.length) UI.toast(res.notes.join('；'), res.files.length ? 'ok' : 'err');
+      list = res.files;
+      if (!list.length) return;
+    }
 
     if (list.length === 1) {
       const file = list[0];

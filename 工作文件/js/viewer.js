@@ -546,6 +546,44 @@
       : '<div class="viewer-fallback-note">表格没有可显示的内容</div>';
   }
 
+  /* PDF 文本层：把每页文字按坐标铺成透明可选文本，便于选中、复制、
+     交给翻译工具。画布仍负责显示，这层只承载文字。 */
+  function buildPdfTextLayer(vp, content) {
+    const layer = document.createElement('div');
+    layer.className = 'pdf-text-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    const items = (content && content.items) || [];
+    /* 极端页（上千个文本块）不铺，避免节点过多拖慢滚动 */
+    if (!items.length || items.length > 1500) return layer;
+    const ctx = document.createElement('canvas').getContext('2d');
+    const fontCache = {};
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it || !it.str || !it.str.trim()) continue;
+      const tx = window.pdfjsLib.Util.transform(vp.transform, it.transform);
+      /* 只处理水平文本；旋转文本跳过，避免整页错位 */
+      if (Math.abs(tx[1]) > 0.02 || Math.abs(tx[2]) > 0.02) continue;
+      const fontH = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]) || (it.height || 0) * vp.scale;
+      if (!fontH || fontH < 1) continue;
+      const span = document.createElement('span');
+      span.textContent = it.str;
+      span.style.left = tx[4].toFixed(2) + 'px';
+      span.style.top = (tx[5] - fontH).toFixed(2) + 'px';
+      const key = fontH.toFixed(1);
+      if (!fontCache[key]) fontCache[key] = '400 ' + key + 'px sans-serif';
+      span.style.font = fontCache[key];
+      /* 按原始文字宽度横向缩放，让选中框贴合原排版 */
+      const target = (it.width || 0) * vp.scale;
+      if (target > 0) {
+        ctx.font = fontCache[key];
+        const measured = ctx.measureText(it.str).width;
+        if (measured > 0) span.style.transform = 'scaleX(' + (target / measured).toFixed(3) + ')';
+      }
+      layer.appendChild(span);
+    }
+    return layer;
+  }
+
   async function renderPdf(doc, query) {
     if (!window.pdfjsLib) throw new Error('预览组件未加载');
     const buf = await doc.blob.arrayBuffer();
@@ -564,12 +602,23 @@
       const wrap = document.createElement('div');
       wrap.className = 'pdf-page';
       if (pages.indexOf(i) >= 0) wrap.classList.add('hit-page');
+      /* 画布与文字层共用一个精确定位的舞台，保证坐标对齐 */
+      const stage = document.createElement('div');
+      stage.className = 'pdf-stage';
+      stage.style.width = Math.round(vp.width) + 'px';
+      stage.style.height = Math.round(vp.height) + 'px';
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(vp.width);
       canvas.height = Math.round(vp.height);
-      wrap.appendChild(canvas);
+      stage.appendChild(canvas);
+      wrap.appendChild(stage);
       el.body.appendChild(wrap);
       await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      /* 有文字层就铺上去；扫描件没有文字层，静默跳过只显示图像 */
+      try {
+        const content = await page.getTextContent();
+        stage.appendChild(buildPdfTextLayer(vp, content));
+      } catch (e) { /* 忽略：该页无可选文本 */ }
       page.cleanup();
     }
     try { pdf.destroy(); } catch (e) { /* 忽略 */ }
