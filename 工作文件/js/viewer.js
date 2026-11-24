@@ -36,11 +36,12 @@
   function resetHits() {
     hitState = { marks: [], pages: [], idx: 0, query: '' };
     if (el.body) {
-      const old = el.body.querySelectorAll('mark.kw-hit-focus, .hit-col-head, .hit-row-head');
+      const old = el.body.querySelectorAll('mark.kw-hit-focus, .hit-col-head, .hit-row-head, .hit-line');
       for (let i = 0; i < old.length; i++) {
         old[i].classList.remove('kw-hit-focus');
         old[i].classList.remove('hit-col-head');
         old[i].classList.remove('hit-row-head');
+        old[i].classList.remove('hit-line');
       }
     }
     if (el.hits) el.hits.hidden = true;
@@ -85,15 +86,20 @@
   }
 
   /* 高亮命中词所在的整行/整块：
-     纯文本按 .vline 行标记，docx 等结构化内容找块级祖先，表格高亮整行。 */
+     纯文本按 .vline 行标记，docx 等结构化内容找块级祖先；
+     表格里命中时标到 <tr> 上，让横向一整行都铺浅色块（含冻结行号列）。 */
   function decorateHitLines(rootEl, marks) {
     if (!rootEl || !marks || !marks.length) return;
     const done = [];
     marks.forEach(function (m) {
       if (!m.isConnected) return;
       let t = m.closest('.vline');
-      if (!t) t = m.closest('p, li, h1, h2, h3, h4, h5, h6, td, th, dd, dt, blockquote');
-      if (!t) t = m.closest('tr');
+      if (!t) {
+        /* 表格单元格 → 整行；单元格里再嵌段落时同样落到行上 */
+        const cell = m.closest('td, th');
+        t = cell ? cell.closest('tr') : null;
+      }
+      if (!t) t = m.closest('p, li, h1, h2, h3, h4, h5, h6, dd, dt, blockquote');
       if (!t || t === rootEl || done.indexOf(t) >= 0) return;
       done.push(t);
       t.classList.add('hit-line');
@@ -198,6 +204,8 @@
       if (wrap && wrap.scrollIntoView) wrap.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
     }
     updateHitBar();
+    /* 定位过程中可能发生横/纵向滚动，滑块位置需要立刻跟上 */
+    requestPanSync();
   }
 
   function setupHits(query, marks, pages) {
@@ -218,6 +226,24 @@
 
   /* ---------- 左右平移滑块 ---------- */
 
+  /* 滑块位置跟随真实滚动位置：命中定位、手动滚动、缩放后都要对齐 */
+  function syncPan() {
+    if (!el.panRange || !panTarget) return;
+    const max = Math.max(1, Math.round(panTarget.scrollWidth - panTarget.clientWidth));
+    if (parseFloat(el.panRange.max) !== max) el.panRange.max = String(max);
+    const v = Math.round(Math.max(0, Math.min(max, panTarget.scrollLeft || 0)));
+    if (el.panRange.value !== String(v)) el.panRange.value = String(v);
+  }
+
+  let panRaf = 0;
+  function requestPanSync() {
+    if (panRaf) return;
+    panRaf = window.requestAnimationFrame(function () {
+      panRaf = 0;
+      syncPan();
+    });
+  }
+
   function setupPan() {
     if (!el.pan || !el.panRange || !el.body) return;
     /* 横向滚动可能发生在 viewerBody 自身或其内部的 .sheet-view */
@@ -236,6 +262,11 @@
     el.pan.hidden = false;
     el.panRange.max = String(Math.max(1, Math.round(max)));
     el.panRange.value = String(Math.round(target.scrollLeft || 0));
+    /* 目标元素换了的话，补上滚动监听，保证滑块跟着内容走 */
+    if (target.dataset && target.dataset.panBound !== '1') {
+      target.dataset.panBound = '1';
+      target.addEventListener('scroll', requestPanSync, { passive: true });
+    }
   }
 
   function bindPan() {
@@ -244,6 +275,8 @@
     el.panRange.addEventListener('input', function () {
       if (panTarget) panTarget.scrollLeft = parseInt(el.panRange.value, 10) || 0;
     });
+    /* 结果页里滚动（含命中定位的平滑滚动）时，滑块同步到当前位置 */
+    if (el.body) el.body.addEventListener('scroll', requestPanSync, { passive: true });
     /* 窗口尺寸变化时重新计算是否需要滑块及其行程 */
     window.addEventListener('resize', function () {
       if (el.root && el.root.classList.contains('open')) setupPan();

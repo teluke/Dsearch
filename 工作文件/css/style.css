@@ -937,9 +937,10 @@ table.grid td.num { font-variant-numeric: tabular-nums; }
   font-family: var(--font-ui);
   color: var(--text);
 }
-/* 搜索命中所在的整行：淡黄底 + 左侧主色竖条 */
+/* 搜索命中所在的整行：淡黄底 + 左侧主色竖条
+   （表格里的命中已改到 <tr> 上，由下方浅蓝整行色块负责，这里排除行元素避免两层底打架） */
 .viewer-text .hit-line,
-.docx-view .hit-line,
+.docx-view .hit-line:not(tr),
 .ocr-text .hit-line {
   background: #FDF3D7;
   box-shadow: inset 3px 0 0 var(--primary);
@@ -2293,6 +2294,28 @@ mark.kw-hit.kw-hit-focus {
 /* 左侧行号有 sticky 底色，优先级更高，单独覆盖成同一块浅色 */
 .sheet-view tbody tr td.row-idx.hit-row-head,
 .sheet-view tbody tr:nth-child(even) td.row-idx.hit-row-head {
+  background: #DCE8FF;
+  color: var(--primary-2);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px rgba(108, 139, 245, 0.28);
+}
+
+/* 命中所在整行：横向一整行都铺浅色块，和表头同族但淡一档
+   （导出表格在 .sheet-view，Word 里的表格在 .docx-view） */
+.sheet-view tr.hit-line > td,
+.docx-view tr.hit-line > td {
+  background: #EDF2FF;
+}
+/* 冻结的行号列跟随整行底色 */
+.sheet-view tbody tr.hit-line > td.row-idx,
+.sheet-view tbody tr:nth-child(even).hit-line > td.row-idx {
+  background: #E3EBFF;
+}
+/* 行表头（行号 + 首个数据格）比整行再深一档，切换命中时仍能指出是哪一行 */
+.sheet-view tr.hit-line > td.hit-row-head,
+.sheet-view tbody tr.hit-line > td.row-idx.hit-row-head,
+.sheet-view tbody tr:nth-child(even).hit-line > td.row-idx.hit-row-head,
+.docx-view tr.hit-line > td.hit-row-head {
   background: #DCE8FF;
   color: var(--primary-2);
   font-weight: 700;
