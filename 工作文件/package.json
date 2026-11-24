@@ -1,0 +1,9 @@
+{
+  "name": "workfile-archive",
+  "version": "2.3.0",
+  "private": true,
+  "description": "工作文件 · 本地文件档案工具（静态站 + 安全静态服务）",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

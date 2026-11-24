@@ -1,0 +1,35 @@
+{
+  "id": "workfile-local-archive",
+  "name": "工作文件",
+  "short_name": "工作文件",
+  "description": "本地文件档案工具：归档、记录、统计、查询与备份",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#F0F4FD",
+  "theme_color": "#F0F4FD",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+# 「工作文件」本地仓库忽略规则
+# 原则：只入库应用源码、依赖、字体图标、文档与合成测试样例；
+#       运行时产生的个人资料、备份包、导出表、浏览器数据一律不入库。
+
+# 工作区元数据与测试产物（浏览器 profile、截图、node_modules、临时脚本）
+.workbuddy/
+
+# 版本存档目录（git bundle 与源码快照 zip，体积大，不入库）
+backups/
+*.bundle
+
+# 应用绑定标记（含 appId 与本机绝对路径）
+.wbapp_*.genie
+
+# 运行时导出的数据文件（可能含个人资料）
+*.zip
+工作文件-备份-*.zip
+*.csv
+*.log
+
+# 系统与编辑器残留
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+
+# 密钥与环境变量
+.env
+.env.*
+*.pem
+*.key
+*password*
+*secret*
+
+# 说明：工作文件/tests/samples/ 内为合成测试样例（docx/xlsx/pdf/jpg 与日期命名 txt），
+# 不含任何真实资料，作为回归测试资产保留入库。
+*.genie

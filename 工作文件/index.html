@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F0F4FD">
+<meta name="description" content="工作文件 · 本地文件档案工具">
+<title>工作文件</title>
+<link rel="icon" type="image/png" href="assets/icon-192.png">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="工作文件">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="appbar" id="appbar">
+    <div class="appbar-inner">
+      <button class="icon-btn neu press" id="menuBtn" type="button" aria-label="打开菜单" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.6" height="6.6" rx="2" fill="currentColor"/><rect x="13.4" y="4" width="6.6" height="6.6" rx="2" fill="currentColor"/><rect x="4" y="13.4" width="6.6" height="6.6" rx="2" fill="currentColor"/><rect x="13.4" y="13.4" width="6.6" height="6.6" rx="2" fill="currentColor"/></svg>
+      </button>
+      <span class="appbar-title" id="appTitle">工作文件</span>
+    </div>
+    <div class="global-search">
+      <div class="search-shell">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15 15l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <input id="globalSearch" type="search" placeholder="搜索文件名、正文内容…" autocomplete="off" aria-label="全局搜索">
+        <button class="search-clear" id="globalSearchClear" type="button" aria-label="清空搜索" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="view" id="view-home" data-tab="home"></section>
+    <section class="view" id="view-archive" data-tab="archive"></section>
+    <section class="view" id="view-records" data-tab="records"></section>
+    <section class="view" id="view-stats" data-tab="stats"></section>
+    <section class="view" id="view-events" data-tab="events"></section>
+    <section class="view" id="view-search" data-tab="search"></section>
+    <section class="view" id="view-settings" data-tab="settings"></section>
+  </main>
+
+  <div class="nav-drawer" id="navDrawer" aria-hidden="true">
+    <div class="nav-scrim" data-close-nav></div>
+    <div class="nav-panel" role="dialog" aria-modal="true" aria-label="导航菜单">
+      <div class="nav-head">
+        <span class="nav-logo neu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M14 3v4h4M9 12h6M9 16h4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </span>
+        <div class="nav-title">
+          <span class="hand">工作文件</span>
+          <span class="nav-sub">本地档案 · 数据不上传</span>
+        </div>
+      </div>
+      <nav class="nav-list" id="navList" aria-label="模块导航">
+        <button class="nav-item on" data-tab="home" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v8a1.6 1.6 0 0 1-1.6 1.6H5.6A1.6 1.6 0 0 1 4 19z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M9.5 20v-6h5v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></span>
+          <span class="nav-label">主页</span>
+        </button>
+        <button class="nav-item" data-tab="archive" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="4" rx="1.6" fill="currentColor"/><path d="M5 11h14v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></span>
+          <span class="nav-label">文件归档</span>
+        </button>
+        <button class="nav-item" data-tab="records" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg></span>
+          <span class="nav-label">文档记录</span>
+        </button>
+        <button class="nav-item" data-tab="stats" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="12" width="4.4" height="8.5" rx="1.6" fill="currentColor"/><rect x="9.8" y="6" width="4.4" height="14.5" rx="1.6" fill="currentColor"/><rect x="16.1" y="9" width="4.4" height="11.5" rx="1.6" fill="currentColor"/></svg></span>
+          <span class="nav-label">文档统计</span>
+        </button>
+        <button class="nav-item" data-tab="events" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 9.5h17M8 3v3.5M16 3v3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M8 14l2.4 2.4 4.6-4.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span class="nav-label">事件</span><i class="ndot"></i>
+        </button>
+        <button class="nav-item" data-tab="search" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15 15l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+          <span class="nav-label">信息查询</span>
+        </button>
+        <button class="nav-item" data-tab="settings" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 3.8l1 2.6a5.7 5.7 0 0 1 2.3 1.3l2.7-.5 1.3 2.3-1.9 2a5.9 5.9 0 0 1 0 2.7l1.9 2-1.3 2.3-2.7-.5a5.7 5.7 0 0 1-2.3 1.3l-1 2.7h-2.6l-.7-2.7a5.7 5.7 0 0 1-2.3-1.3l-2.7.5-1.3-2.3 1.9-2a5.9 5.9 0 0 1 0-2.7l-1.9-2 1.3-2.3 2.7.5a5.7 5.7 0 0 1 2.3-1.3l.7-2.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span>
+          <span class="nav-label">个人设置</span>
+        </button>
+        <button class="nav-item nav-sync" id="navSync" type="button">
+          <span class="icon-box"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M14 14h2.6v2.6H14zM17.4 17.4h2.6v2.6h-2.6z" fill="currentColor"/><path d="M14 20h1.4M20 14v1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+          <span class="nav-label">扫码连接电脑</span>
+        </button>
+      </nav>
+      <div class="nav-foot">工作文件 v2.8.0 · 无账号 · 无云端</div>
+    </div>
+  </div>
+
+  <div class="fab-wrap" id="fabWrap">
+    <button class="fab-sub" data-fab="template" type="button" aria-label="新建系列模板">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M4 3h7l3 3v9H4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 8h5M7 11h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    </button>
+    <button class="fab-sub" data-fab="camera" type="button" aria-label="拍照归档">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><rect x="2.5" y="5.5" width="13" height="9" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="9" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.5 5.5l1-1.6h3l1 1.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="fab-sub" data-fab="file" type="button" aria-label="选取文件">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 3.5v11M3.5 9h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <button class="fab" id="fab" type="button" aria-label="添加文件" aria-expanded="false">
+      <svg viewBox="0 0 22 22" aria-hidden="true"><path d="M11 4.5v13M4.5 11h13" stroke="#FFFFFF" stroke-width="2.3" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <input type="file" id="filePicker" class="pick-hidden" multiple>
+  <input type="file" id="cameraPicker" class="pick-hidden" accept="image/*" capture="environment">
+  <input type="file" id="backupPicker" class="pick-hidden" accept=".zip,application/zip,application/x-zip-compressed">
+
+  <div class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-scrim" data-close-drawer></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+      <div class="drawer-head">
+        <h2 id="drawerTitle" class="hand"></h2>
+        <button class="icon-btn neu" data-close-drawer type="button" aria-label="关闭">
+          <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="modal" aria-hidden="true">
+    <div class="modal-scrim" data-close-modal></div>
+    <div class="modal-card neu" role="dialog" aria-modal="true" id="modalCard"></div>
+  </div>
+
+  <div class="viewer" id="viewer" aria-hidden="true">
+    <div class="viewer-scrim" data-viewer-close></div>
+    <div class="viewer-card" role="dialog" aria-modal="true" aria-label="文件查看">
+      <div class="viewer-head">
+        <span class="icon-box" id="viewerIcon"></span>
+        <div class="viewer-title">
+          <span class="v-name" id="viewerName"></span>
+          <span class="v-meta" id="viewerMeta"></span>
+        </div>
+        <button class="icon-btn sm neu" id="viewerExternal" type="button" aria-label="用系统应用打开">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 14v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+        <button class="icon-btn neu" data-viewer-close type="button" aria-label="关闭">
+          <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="viewer-body" id="viewerBody"></div>
+      <div class="viewer-zoom neu" id="viewerZoom" hidden>
+        <span class="zoom-label">缩放</span>
+        <input type="range" id="viewerZoomRange" min="0.7" max="2.2" step="0.05" value="1" aria-label="放大缩小查看文件">
+      </div>
+      <div class="viewer-bottom">
+        <div class="viewer-hits neu" id="viewerHits" hidden>
+          <button class="icon-btn sm neu press" id="hitPrev" type="button" aria-label="上一处">‹</button>
+          <span class="hit-count" id="hitCount">1 / 1</span>
+          <button class="icon-btn sm neu press" id="hitNext" type="button" aria-label="下一处">›</button>
+          <button class="icon-btn sm" id="hitClose" type="button" aria-label="关闭定位">
+            <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="viewer-pan neu" id="viewerPan" hidden>
+          <span class="pan-label">‹›</span>
+          <input type="range" id="viewerPanRange" min="0" max="100" value="0" aria-label="左右平移查看文件">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="progress" id="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"><i></i></div><span id="progressText"></span></div>
+</div>
+
+<script src="vendor/dexie.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/mammoth.browser.min.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/qrcode.min.js"></script>
+<script src="vendor/jsqr.min.js"></script>
+<script src="vendor/tesseract/tesseract.min.js"></script>
+<script src="js/db.js"></script>
+<script src="js/parser.js"></script>
+<script src="js/ocr.js"></script>
+<script src="js/ocr-job.js"></script>
+<script src="js/keywords.js"></script>
+<script src="js/events.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/backup.js"></script>
+<script src="js/viewer.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/views.js"></script>
+<script src="js/sync-ui.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
