@@ -47,6 +47,7 @@
     if (el.hits) el.hits.hidden = true;
     if (el.pan) el.pan.hidden = true;
     panTarget = null;
+    applyBottomInset();
   }
 
   /* 在渲染好的 DOM 里查找关键词并包上高亮标记（跳过脚本与样式节点） */
@@ -171,22 +172,110 @@
     return pages;
   }
 
+  /* ---------- 底部浮层避让 ----------
+     跳转条与平移滑块是浮在内容之上的，命中行贴近末尾时会被压住。
+     这里统一算「浮层占掉多少高度」，用于滚动避让与底部留白。 */
+
+  function bottomInset() {
+    if (!el.root) return 0;
+    const bar = el.root.querySelector('.viewer-bottom');
+    if (!bar) return 0;
+    const hitsOn = el.hits && !el.hits.hidden;
+    const panOn = el.pan && !el.pan.hidden;
+    if (!hitsOn && !panOn) return 0;
+    const h = bar.getBoundingClientRect().height;
+    if (!h) return 0;
+    /* 14px 是浮层距底部的偏移，再留 8px 呼吸位 */
+    return Math.round(h) + 14 + 8;
+  }
+
+  /* 底部留白：即使手动滚到最底，最后几行也不会被浮层压住 */
+  function applyBottomInset() {
+    if (!el.body) return;
+    const px = bottomInset();
+    el.body.style.paddingBottom = px ? px + 'px' : '';
+  }
+
+  /* 把命中项滚进「真正可见」的区域：纵向避开底部浮层，横向避开冻结行号列。
+     返回需要滚动的位移；都是可视坐标，按 zoom 折算回滚动单位。 */
+  function hitDelta(node) {
+    if (!el.body || !node || !node.getBoundingClientRect) return null;
+    const bR = el.body.getBoundingClientRect();
+    const mR = node.getBoundingClientRect();
+    if (!mR.height && !mR.width) return null;
+    const zoom = parseFloat(el.body.style.zoom) || 1;
+    const bar = bottomInset();
+    const idxCell = el.body.querySelector('.sheet-view td.row-idx');
+    const stickyW = idxCell ? idxCell.getBoundingClientRect().width : 0;
+    const areaTop = bR.top + 12;
+    const areaBottom = bR.bottom - bar - 12;
+    const areaLeft = bR.left + stickyW + 12;
+    const areaRight = bR.right - 12;
+
+    let dTop = 0;
+    if (mR.bottom > areaBottom) dTop = mR.bottom - areaBottom;
+    else if (mR.top < areaTop) dTop = mR.top - areaTop;
+    /* 命中块比可用区还高时，优先露出顶部 */
+    if (mR.height > areaBottom - areaTop && mR.top <= areaTop) dTop = mR.top - areaTop;
+
+    let dLeft = 0;
+    if (mR.right > areaRight) dLeft = mR.right - areaRight;
+    else if (mR.left < areaLeft) dLeft = mR.left - areaLeft;
+
+    if (!dTop && !dLeft) return null;
+    return {
+      top: Math.max(0, el.body.scrollTop + dTop / zoom),
+      left: Math.max(0, el.body.scrollLeft + dLeft / zoom)
+    };
+  }
+
+  let hitFixTimer = 0;
+
+  function scrollHitIntoView(node, smooth) {
+    const target = hitDelta(node);
+    if (!target) return;
+    if (smooth) {
+      try {
+        el.body.scrollTo({ top: target.top, left: target.left, behavior: 'smooth' });
+        return;
+      } catch (e) { /* 老浏览器不支持对象参数，退回直接赋值 */ }
+    }
+    el.body.scrollTop = target.top;
+    el.body.scrollLeft = target.left;
+  }
+
+  /* 平滑滚动 + 布局稳定后再校验一次：浮层高度、命中词放大都会改变行高，
+     一次算不准，这里在动画结束后补一次硬校正，保证末行也不被压住。 */
+  function scheduleHitFix(node) {
+    if (hitFixTimer) clearTimeout(hitFixTimer);
+    hitFixTimer = setTimeout(function () {
+      hitFixTimer = 0;
+      if (!node || !node.isConnected) return;
+      scrollHitIntoView(node, false);
+    }, 460);
+  }
+
   function updateHitBar() {
     if (!el.hits) return;
     const total = hitState.marks.length || hitState.pages.length;
     if (!hitState.query || !total) {
       el.hits.hidden = true;
+      applyBottomInset();
       return;
     }
     el.hits.hidden = false;
     if (el.hitCount) el.hitCount.textContent =
       (hitState.idx + 1) + ' / ' + total + (hitState.pages.length ? ' 页' : ' 处');
+    applyBottomInset();
   }
 
   function gotoHit(i) {
     const total = hitState.marks.length || hitState.pages.length;
     if (!total) return;
     hitState.idx = ((i % total) + total) % total;
+    /* 先把底部浮层留白算好，再量命中位置，否则会按旧的可用区算 */
+    applyBottomInset();
+    let node = null;
     if (hitState.marks.length) {
       hitState.marks.forEach(function (m, j) {
         const cur = j === hitState.idx;
@@ -194,15 +283,14 @@
         /* v2.7.0：当前命中词放大一倍显示，切换命中处时只保留一处放大 */
         m.classList.toggle('kw-hit-focus', cur);
       });
-      const m = hitState.marks[hitState.idx];
+      node = hitState.marks[hitState.idx];
       /* 表头浅色高亮跟随当前命中词，切换时清掉上一处的表头标记 */
-      applyHeaderHighlight(el.body, m);
-      /* inline: nearest 只做纵向滚动，避免把内容横向滚出视野 */
-      if (m && m.scrollIntoView) m.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+      applyHeaderHighlight(el.body, node);
     } else if (hitState.pages.length) {
-      const wrap = el.body.querySelectorAll('.pdf-page')[hitState.pages[hitState.idx] - 1];
-      if (wrap && wrap.scrollIntoView) wrap.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
+      node = el.body.querySelectorAll('.pdf-page')[hitState.pages[hitState.idx] - 1];
     }
+    scrollHitIntoView(node, true);
+    scheduleHitFix(node);
     updateHitBar();
     /* 定位过程中可能发生横/纵向滚动，滑块位置需要立刻跟上 */
     requestPanSync();
@@ -221,6 +309,8 @@
     el.hitNext.addEventListener('click', function () { gotoHit(hitState.idx + 1); });
     el.hitClose.addEventListener('click', function () {
       if (el.hits) el.hits.hidden = true;
+      /* 收起定位条后回收底部留白，内容可以继续贴底显示 */
+      applyBottomInset();
     });
   }
 
@@ -256,12 +346,14 @@
     panTarget = target;
     if (!target) {
       el.pan.hidden = true;
+      applyBottomInset();
       return;
     }
     const max = target.scrollWidth - target.clientWidth;
     el.pan.hidden = false;
     el.panRange.max = String(Math.max(1, Math.round(max)));
     el.panRange.value = String(Math.round(target.scrollLeft || 0));
+    applyBottomInset();
     /* 目标元素换了的话，补上滚动监听，保证滑块跟着内容走 */
     if (target.dataset && target.dataset.panBound !== '1') {
       target.dataset.panBound = '1';
