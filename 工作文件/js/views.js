@@ -11,7 +11,7 @@
     records: { filter: 'all', visible: 80 },
     stats: { seriesId: null },
     events: { seriesId: null, seg: 'cycle', visible: 100 },
-    search: { q: '', seriesId: null, ext: null, filterWords: [] },
+    search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
     memoEditId: null,
     docs: [],
@@ -986,12 +986,43 @@
     return safe.replace(re, '<mark class="kw-hit">$1</mark>');
   }
 
-  /* v2.7.0 自定义筛选词：匹配结果区上方的词签，点词即按该词重新检索 */
+  /* v2.9.2 自定义筛选词：在「当前搜索结果」之上再筛一层，可多选取交集。
+     词签右上角的小 × 用于取消该条筛选。 */
+  function activeFilters() {
+    return (state.search.activeFilters || []).filter(function (w) { return w; });
+  }
+
+  /* 一条结果的全部可筛文本：文件名 + 正文 + 字段值 + 系列名 */
+  function resultHaystack(r) {
+    const d = r.doc || {};
+    const fields = d.fields ? Object.keys(d.fields).map(function (k) { return String(d.fields[k] == null ? '' : d.fields[k]); }).join(' ') : '';
+    return [d.name || '', d.fullText || '', fields, seriesName(d.seriesId) || ''].join(' ').toLowerCase();
+  }
+
+  /* 按激活的筛选词收窄结果集，全部满足才保留 */
+  function visibleResults() {
+    const fs = activeFilters();
+    if (!fs.length) return searchResults;
+    const words = fs.map(function (w) { return w.toLowerCase(); });
+    return searchResults.filter(function (r) {
+      const hay = resultHaystack(r);
+      for (let i = 0; i < words.length; i++) {
+        if (hay.indexOf(words[i]) < 0) return false;
+      }
+      return true;
+    });
+  }
+
   function filterBarHtml() {
-    const q = state.search.q.trim();
+    const active = activeFilters();
     return '<div class="qf-bar">' +
       (state.search.filterWords || []).map(function (w) {
-        return '<button class="chip qf-word' + (q === w ? ' on' : '') + '" data-q-filter-word="' + esc(w) + '" type="button" title="按此词筛选">' + esc(w) + '</button>';
+        const on = active.indexOf(w) >= 0;
+        return '<button class="chip qf-word' + (on ? ' on' : '') + '" data-q-filter-word="' + esc(w) + '" type="button" ' +
+          'title="' + (on ? '取消这个筛选条件' : '在当前结果里再按「' + esc(w) + '」收窄') + '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+          esc(w) +
+          (on ? '<span class="qf-x" data-q-filter-off="' + esc(w) + '" role="button" aria-label="取消筛选 ' + esc(w) + '">×</span>' : '') +
+          '</button>';
       }).join('') +
       '<button class="btn sm ghost qf-manage" data-q-filter-manage type="button" title="管理自定义筛选词">＋ 筛选词</button>' +
       '</div>';
@@ -999,8 +1030,15 @@
 
   function searchResultsHtml() {
     const q = state.search.q.trim();
-    const title = '<div class="section-title"><span>匹配结果</span><span class="count">' +
-      (q && searchResults.length ? searchResults.length + ' 条 · 点击直达文件' : '自定义筛选词') + '</span></div>';
+    const fs = activeFilters();
+    const list = visibleResults();
+    let countText = '自定义筛选词';
+    if (q) {
+      if (!searchResults.length) countText = '无匹配';
+      else if (fs.length && list.length !== searchResults.length) countText = '筛选后 ' + list.length + ' 条 · 共 ' + searchResults.length + ' 条';
+      else countText = list.length + ' 条 · 点击直达文件';
+    }
+    const title = '<div class="section-title"><span>匹配结果</span><span class="count">' + countText + '</span></div>';
     if (!q) {
       return title + filterBarHtml() +
         emptyBlock('输入关键词开始查找', '在顶部搜索栏输入即可，文件名、字段值、文档正文、图片中的文字都会参与匹配');
@@ -1009,7 +1047,11 @@
       return title + filterBarHtml() +
         emptyBlock('没有找到匹配的文件', '换个关键词，或放宽系列与类型筛选');
     }
-    const rows = searchResults.map(function (r) {
+    if (!list.length) {
+      return title + filterBarHtml() +
+        emptyBlock('筛选后没有剩余结果', '点筛选词右上角的 × 取消条件，或再换一个词试试');
+    }
+    const rows = list.map(function (r) {
       const d = r.doc;
       const sn = seriesName(d.seriesId);
       const hitLabel = r.hit === 'text' ? '<span class="badge">全文</span>'
@@ -1023,7 +1065,8 @@
         '</tr>';
     }).join('');
     return title + filterBarHtml() +
-      '<div class="inline-hint" style="margin:0 2px 8px">点任意一行，直接打开文件并定位到关键词位置</div>' +
+      '<div class="inline-hint" style="margin:0 2px 8px">点任意一行，直接打开文件并定位到关键词位置' +
+      (fs.length ? '；当前筛选：' + esc(fs.join(' + ')) : '') + '</div>' +
       '<div class="table-wrap"><table class="grid"><thead><tr><th>文件名</th><th>文件日期</th><th>系列</th><th>命中内容</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
@@ -1048,7 +1091,10 @@
 
   /* 外部（全局搜索栏 / 关键词关联表）设置关键词 */
   async function setSearchQuery(q) {
-    state.search.q = q || '';
+    const next = q || '';
+    /* 换了搜索词就清掉上一轮叠加的筛选，避免旧条件把新结果筛空 */
+    if (next.trim() !== state.search.q.trim()) state.search.activeFilters = [];
+    state.search.q = next;
     if (state.tab !== 'search') {
       await window.App.switchTab('search', true);
     } else {
@@ -1056,9 +1102,19 @@
     }
   }
 
+  /* 只刷新「匹配结果」这一块：筛选词开关不用重跑数据库查询，也不打乱滚动位置 */
+  function refreshSearchResults() {
+    const box = document.getElementById('searchResults');
+    if (box) box.innerHTML = searchResultsHtml();
+  }
+
   async function runSearch() {
     const q = state.search.q.trim();
-    if (!q) { searchResults = []; return; }
+    if (!q) {
+      searchResults = [];
+      state.search.activeFilters = [];
+      return;
+    }
     searchResults = await DB.searchDocuments({
       q: q,
       seriesId: state.search.seriesId || null,
@@ -1081,7 +1137,7 @@
     }
 
     const html = '<div class="form">' +
-      '<div class="field"><label>自定义筛选词<span class="hint">点词即用它重新检索，最多 12 个</span></label>' +
+      '<div class="field"><label>自定义筛选词<span class="hint">点词签即在当前结果里再筛一层，可多选，最多 12 个</span></label>' +
       '<div id="qfList">' + listHtml() + '</div></div>' +
       '<div class="field"><label for="qfNew" id="qfLabel">添加筛选词</label>' +
       '<div class="kw-add-row">' +
@@ -3109,14 +3165,23 @@
         return;
       }
 
-      /* v2.7.0 自定义筛选词：点词检索 / 打开管理抽屉 */
+      /* v2.9.2 自定义筛选词：点词在当前结果里再筛一层，点词签右上角 × 取消该条 */
+      const qfOff = e.target.closest('[data-q-filter-off]');
+      if (qfOff) {
+        const w = qfOff.getAttribute('data-q-filter-off') || '';
+        state.search.activeFilters = activeFilters().filter(function (x) { return x !== w; });
+        refreshSearchResults();
+        return;
+      }
       const qfWord = e.target.closest('[data-q-filter-word]');
       if (qfWord) {
         const w = qfWord.getAttribute('data-q-filter-word') || '';
-        state.search.q = w;
-        const g = document.getElementById('globalSearch');
-        if (g) { g.value = w; syncGlobalClear(); }
-        await render('search');
+        const list = activeFilters();
+        const idx = list.indexOf(w);
+        if (idx >= 0) list.splice(idx, 1);
+        else list.push(w);
+        state.search.activeFilters = list;
+        refreshSearchResults();
         return;
       }
       if (e.target.closest('[data-q-filter-manage]')) { openSearchFilterWords(); return; }
@@ -3138,6 +3203,7 @@
 
       if (e.target.closest('[data-search-clear]')) {
         state.search.q = '';
+        state.search.activeFilters = [];
         const g = document.getElementById('globalSearch');
         if (g) { g.value = ''; syncGlobalClear(); }
         await render('search');
