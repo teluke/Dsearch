@@ -212,20 +212,21 @@
     const areaLeft = bR.left + stickyW + 12;
     const areaRight = bR.right - 12;
 
-    let dTop = 0;
-    if (mR.bottom > areaBottom) dTop = mR.bottom - areaBottom;
-    else if (mR.top < areaTop) dTop = mR.top - areaTop;
-    /* 命中块比可用区还高时，优先露出顶部 */
-    if (mR.height > areaBottom - areaTop && mR.top <= areaTop) dTop = mR.top - areaTop;
+    /* 命中处放到可视区正中，不再只在快出屏时挪一点。
+       表格很宽、命中块比可视区还大时退回贴边，优先露出左上角。 */
+    const areaH = areaBottom - areaTop;
+    const areaW = areaRight - areaLeft;
+    let dTop = (mR.top - areaTop) - (areaH - mR.height) / 2;
+    let dLeft = (mR.left - areaLeft) - (areaW - mR.width) / 2;
+    if (mR.height >= areaH) dTop = mR.top - areaTop;
+    if (mR.width >= areaW) dLeft = mR.left - areaLeft;
 
-    let dLeft = 0;
-    if (mR.right > areaRight) dLeft = mR.right - areaRight;
-    else if (mR.left < areaLeft) dLeft = mR.left - areaLeft;
-
-    if (!dTop && !dLeft) return null;
+    if (Math.abs(dTop) < 2 && Math.abs(dLeft) < 2) return null;
+    const maxTop = Math.max(0, (el.body.scrollHeight - el.body.clientHeight) / zoom);
+    const maxLeft = Math.max(0, (el.body.scrollWidth - el.body.clientWidth) / zoom);
     return {
-      top: Math.max(0, el.body.scrollTop + dTop / zoom),
-      left: Math.max(0, el.body.scrollLeft + dLeft / zoom)
+      top: Math.min(maxTop, Math.max(0, el.body.scrollTop + dTop / zoom)),
+      left: Math.min(maxLeft, Math.max(0, el.body.scrollLeft + dLeft / zoom))
     };
   }
 

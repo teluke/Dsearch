@@ -1111,6 +1111,34 @@
       '<div class="table-wrap"><table class="grid"><thead><tr><th>文件名</th><th>文件日期</th><th>系列</th><th>命中内容</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
+  /* 选中系列后，在筛选条下面直接列出该系列的文件，不用先输关键词 */
+  function seriesDocPanelHtml() {
+    const sid = state.search.seriesId;
+    if (!sid) return '';
+    let sname = '系列';
+    for (let i = 0; i < state.series.length; i++) {
+      if (state.series[i].id === sid) { sname = state.series[i].name || sname; break; }
+    }
+    const docs = state.docs.filter(function (d) { return d.seriesId === sid; })
+      .sort(function (a, b) { return String(b.archiveDate || '').localeCompare(String(a.archiveDate || '')); });
+    const shown = docs.slice(0, 12);
+    const rows = shown.length
+      ? '<div class="doc-list">' + shown.map(function (d) {
+          const kind = Parser.kindOf(d.name);
+          return '<button class="doc-card neu press" data-view-open="' + d.id + '" type="button">' +
+            '<span class="icon-box ' + kind + '">' + UI.icon(UI.kindIcon(kind)) + '</span>' +
+            '<span class="meter"><span class="doc-name">' + esc(d.name) + '</span>' +
+            '<span class="doc-meta"><span>' + esc(UI.fmtDate(d.archiveDate)) + '</span></span></span>' +
+            '<span class="doc-side">' + typeBadge(kind) + '</span></button>';
+        }).join('') + '</div>'
+      : emptyBlock('这个系列还没有文件', '归档一份这个系列的文件后，会自动出现在这里');
+    return '<div class="section-title"><span>' + esc(sname) + ' 的文件</span><span class="title-side">' +
+      '<span class="count">' + docs.length + ' 份</span>' +
+      '<button class="section-link" data-nav="archive" type="button">全部归档' + UI.icon('chev') + '</button>' +
+      '</span></div>' + rows +
+      (docs.length > shown.length ? '<p class="inline-hint" style="text-align:center">只显示最近 12 份，点「全部归档」看完整列表</p>' : '');
+  }
+
   function searchHtml() {
     const q = state.search.q.trim();
     const seriesChips = '<button class="chip' + (!state.search.seriesId ? ' on' : '') + '" data-q-series="" type="button">全部系列</button>' +
@@ -1127,6 +1155,7 @@
       '</div></div>' +
       '<div class="chip-scroll" style="margin-top:12px"><div class="chips" data-chips><span class="chip-bg"></span>' + seriesChips + '</div></div>' +
       '<div class="chip-scroll" style="margin-top:8px"><div class="chips" data-chips><span class="chip-bg"></span>' + typeChips + '</div></div>' +
+      seriesDocPanelHtml() +
       '<div id="searchResults" style="margin-top:6px">' + searchResultsHtml() + '</div>';
   }
 
@@ -1354,7 +1383,7 @@
         '<div class="rows" style="margin-top:6px">' + (logs.length ? viewLogRows(logs) : emptyBlock('还没有查看记录', '在文件详情里点「查看文件」后，这里会按日期列出每次查看')) + '</div>' +
         (total > logs.length ? '<div style="padding:8px 0;text-align:center"><button class="btn" data-more-viewlogs type="button">加载更早的记录</button></div>' : '');
     }
-    return cycleEventsHtml(DB.todayISO());
+    return await cycleEventsHtml(DB.todayISO());
   }
 
   function evTag(ev, todayStr) {
@@ -1408,17 +1437,8 @@
       '</div>';
   }
 
-  function cycleEventsHtml(todayStr) {
+  async function cycleEventsHtml(todayStr) {
     const periodic = periodicSeries();
-
-    if (!periodic.length) {
-      return '<div class="topbar"><div>' +
-        '<p class="meta">根据文档记录自动推导</p>' +
-        '</div></div>' +
-        segChipsHtml() +
-        emptyBlock('还没有周期事件', '在设置里编辑系列模板，开启「每周一份」或「每月一份」后，每个周期会自动生成一条事件，归档对应文档即完成') +
-        '<div style="text-align:center;margin-top:-20px"><button class="btn primary" data-ev-new-series type="button">' + UI.icon('plus') + '新建系列模板</button></div>';
-    }
 
     const all = Events.compute(state.docs, state.series, todayStr);
     const filtered = state.events.seriesId
@@ -1427,6 +1447,25 @@
     const pendingList = filtered.filter(function (e) { return e.status !== 'done'; });
     const doneList = filtered.filter(function (e) { return e.status === 'done'; });
     const alertCount = all.filter(function (e) { return e.status === 'overdue' || e.remind; }).length;
+    const memos = await DB.listMemos();
+    const openMemos = memos.filter(function (m) { return !m.done; });
+    const doneMemos = memos.filter(function (m) { return m.done; });
+    const todoItems = pendingList.map(function (e) {
+      return { type: 'event', date: e.endISO || '', time: '', ev: e };
+    }).concat(openMemos.map(function (m) {
+      return { type: 'memo', date: m.date || '', time: m.time || '', memo: m };
+    })).sort(compareTodoItems);
+    todoItems.forEach(function (it, i) {
+      it.html = it.type === 'memo' ? memoTodoHtml(it.memo, todayStr, i) : evCardHtml(it.ev, todayStr, i);
+    });
+    const doneItems = doneList.map(function (e) {
+      return { type: 'event', ev: e };
+    }).concat(doneMemos.map(function (m) {
+      return { type: 'memo', memo: m };
+    }));
+    const doneHtml = doneItems.map(function (it) {
+      return it.type === 'memo' ? memoTodoHtml(it.memo, todayStr) : evCardHtml(it.ev, todayStr);
+    }).join('');
 
     const chips = '<button class="chip' + (!state.events.seriesId ? ' on' : '') + '" data-ev-series="" type="button">全部系列</button>' +
       periodic.map(function (s) {
@@ -1434,29 +1473,34 @@
       }).join('');
 
     const summary = '<div class="ev-summary neu">' +
-      '<div class="ev-sum"><div class="n">' + pendingList.length + '</div><div class="t">待完成</div></div>' +
+      '<div class="ev-sum"><div class="n">' + todoItems.length + '</div><div class="t">待完成</div></div>' +
       '<div class="ev-sum' + (alertCount ? ' alert' : '') + '"><div class="n">' + alertCount + '</div><div class="t">需留意</div></div>' +
-      '<div class="ev-sum"><div class="n">' + doneList.length + '</div><div class="t">已完成</div></div>' +
+      '<div class="ev-sum"><div class="n">' + doneItems.length + '</div><div class="t">已完成</div></div>' +
       '</div>';
 
-    const pendingHtml = pendingList.length
-      ? pendingList.map(function (e, i) { return evCardHtml(e, todayStr, i); }).join('')
-      : emptyBlock('没有待完成的事件', '当前筛选下的周期都已归档文档');
-    const doneHtml = doneList.length
-      ? doneList.map(function (e) { return evCardHtml(e, todayStr); }).join('')
-      : emptyBlock('还没有完成记录', '归档对应周期的文档后，完成情况会出现在这里');
+    const pendingHtml = todoItems.length
+      ? todoItems.map(function (it) { return it.html; }).join('')
+      : emptyBlock(periodic.length ? '没有待办与备忘' : '还没有周期事件',
+        periodic.length ? '周期事件会在归档对应文档后自动完成；备忘录可在首页快速添加'
+          : '在设置里编辑系列模板，开启「每周一份」或「每月一份」后，每个周期会自动生成一条事件');
 
     return '<div class="topbar"><div>' +
-      '<p class="meta">根据文档记录自动推导</p>' +
-      '<p class="sub">' + periodic.length + ' 个周期系列 · 待完成 ' + pendingList.length + ' · 已完成 ' + doneList.length + '</p>' +
+      '<p class="meta">周期事件与备忘录，按时间排在一起</p>' +
+      '<p class="sub">' + periodic.length + ' 个周期系列 · 待完成 ' + todoItems.length + ' · 已完成 ' + doneItems.length + '</p>' +
       '</div></div>' +
       segChipsHtml() +
       summary +
       '<div class="chip-scroll" style="margin-top:14px"><div class="chips" data-chips><span class="chip-bg"></span>' + chips + '</div></div>' +
-      '<div class="section-title"><span>待完成</span><span class="count">' + pendingList.length + ' 个</span></div>' +
+      '<div class="section-title"><span>待办与备忘</span><span class="count">' + todoItems.length + ' 个</span></div>' +
       '<div class="doc-list">' + pendingHtml + '</div>' +
-      '<div class="section-title"><span>已完成</span><span class="count">' + doneList.length + ' 个</span></div>' +
-      '<div class="doc-list">' + doneHtml + '</div>';
+      (doneItems.length
+        ? '<details class="done-fold"><summary>已完成 ' + doneItems.length + ' 项 · 事件与备忘录' + UI.icon('chev') + '</summary>' +
+          '<div class="doc-list">' + doneHtml + '</div></details>'
+        : '') +
+      (periodic.length
+        ? ''
+        : '<div style="text-align:center;margin-top:18px"><button class="btn primary" data-ev-new-series type="button">' +
+          UI.icon('plus') + '新建系列模板</button></div>');
   }
 
   /* ---------- 设置 ---------- */
