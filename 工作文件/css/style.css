@@ -1616,6 +1616,38 @@ input.pick-hidden {
   padding: 2px 2px 0;
 }
 
+/* 中转站：配对码与安全码 */
+.relay-code,
+.relay-sas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 4px 0 2px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card-2);
+}
+.relay-code .rc-label,
+.relay-sas .rs-label {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.relay-code strong {
+  font-size: 24px;
+  letter-spacing: 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+/* 安全码要一眼能看清、能比对，字号给足 */
+.relay-sas strong {
+  font-size: 30px;
+  letter-spacing: 5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
 /* 局域网同步 · 勾选要发送到手机的文件 */
 .pick-tools {
   display: flex;

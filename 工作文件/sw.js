@@ -1,6 +1,6 @@
 /* Service Worker：应用壳缓存，离线可用 */
 
-const CACHE = 'gongzuowenjian-v44';
+const CACHE = 'gongzuowenjian-v46';
 
 /* js/css 经常随版本更新，走网络优先，避免两端版本不一致导致同步配对失败；
    离线时回退到缓存，离线可用性不受影响 */
@@ -21,6 +21,7 @@ const ASSETS = [
   './js/backup.js',
   './js/viewer.js',
   './js/sync.js',
+  './js/relay.js',
   './js/views.js',
   './js/sync-ui.js',
   './js/app.js',
@@ -64,6 +65,10 @@ self.addEventListener('fetch', function (event) {
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+
+  /* 中转站接口是实时数据，走任何缓存策略都会读到上一次的旧响应
+     （旧策略 match 时还 ignoreSearch，第一次的 joined:false 会被永久缓存） */
+  if (url.pathname.indexOf('/api/') === 0) return;
 
   if (req.mode === 'navigate') {
     event.respondWith((async function () {

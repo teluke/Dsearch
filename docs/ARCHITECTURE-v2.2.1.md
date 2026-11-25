@@ -194,6 +194,29 @@ db.version(3).stores({           // v3 仅新增表，不改变既有表结构
 
 消息类型：`hello / pong / frag / manifest / plan / go / audit / need / doc-begin / doc-meta-only / doc-end / del / memo / memo-del / folders / done`。
 
+### 8.1 局域网中转站（v2.11，只牵线）
+
+扫码配对要手递手传 SDP，平板网卡一多配对码就超出二维码容量。中转站把「递 SDP」交给本机服务，配对完成后仍走上面这套传输管线。
+
+| 环节 | 做法 |
+| --- | --- |
+| 开会话 | 电脑端页面 `POST /api/relay/open` 拿到 `sid` + 6 位配对码 + 令牌；二维码里只放 `http://内网IP:端口/#relay=<sid>.<code>`（约 70 字符） |
+| 地址来源 | `GET /api/relay/addr` 返回本机私网 IPv4（优先 `192.168`），用于把 `localhost` 换成平板可达的地址 |
+| 平板加入 | 打开网址 → 页面读 `#relay=` → `POST /api/relay/join` 用配对码换客户端令牌 → 轮询 `GET /api/relay/sig?kind=offer` |
+| 交换 SDP | 电脑端 `POST /sig?kind=offer`，平板取走后 `Sync.acceptOffer()` 生成 answer 再 `POST /sig?kind=answer`，电脑端取到后 `Sync.acceptAnswer()` |
+| 交接 | 连上后 `Relay.phase = done`，面板交回原流程；中转模式下电脑端跳过勾选，差额算完直接全量发送 |
+| 失效 | 会话闲置 10 分钟、电脑端关闭中转、或平板主动 `leave` 后立即销毁 |
+
+**安全边界**（`server.js` 的 `handleRelay`）：
+
+- 来源必须是本机或私网（`isPrivateAddr`），公网地址 403
+- `Host` 必须是 IP 字面量 / `localhost` / `.local`（挡 DNS rebinding），`Origin` 必须同源、`Sec-Fetch-Site` 不能是 `cross-site`
+- 配对码定长比较、5 分钟内最多 10 次；单客户端绑定，电脑端可 `kick`
+- **只存两段 SDP 文本**，大小上限 8KB，不写磁盘、不记日志；文件内容从不经过这里
+- 为什么不做应用层加密：内网 `http://192.168.x.x` 不是安全上下文，浏览器不提供 `crypto.subtle`（实测 `isSecureContext=false`），端到端加密在平板上无法落地。文件加密改由 WebRTC 的 DTLS 承担，强度与扫码直传一致
+
+**Service Worker 注意**：`/api/` 开头的请求一律不拦截。早期策略对 GET 缓存优先且 `ignoreSearch`，会把 `/api/relay/status` 的第一次响应（`joined:false`）永久缓存，导致电脑端始终看不到平板已加入。
+
 PROTO = 2。`hello` 携带协议版本，两端不一致时直接报错提示刷新，避免旧页面卡死。
 
 **大批量兜底**：直连全程依赖手机保持前台，文件多或单文件大时改用「导出备份 zip → 手机端合并导入」，那条路径可断点、可精确核对 `manifest.json` 里的 `fileCount`。

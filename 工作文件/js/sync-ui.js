@@ -18,6 +18,9 @@
   let pickRows = [];          // 电脑端：手机缺哪些（id / name / size）
   let picked = new Set();     // 电脑端：勾选中的 id
   let auditInfo = null;       // 对账结果
+  /* 走中转站进来就是「打开网址自动同步」，不再停下来等勾选；
+     要一份份挑的，走旧扫码通道 */
+  let relayAuto = false;
 
   /* ---------- 二维码 ---------- */
 
@@ -374,6 +377,19 @@
       done: ['同步完成', 'ok'],
       error: ['出现问题', 'err']
     };
+    const rel = relSt();
+    /* done 表示配对已交接，徽标要跟着传输阶段走，不能再显示「已连接」 */
+    if (rel.phase && rel.phase !== 'idle' && rel.phase !== 'done') {
+      const rmap = {
+        opening: ['正在连接', 'warn'],
+        wait: ['等平板扫码', 'warn'],
+        connecting: ['正在连接', 'warn'],
+        done: ['已连接', 'ok'],
+        error: ['出现问题', 'err']
+      };
+      const rv = rmap[rel.phase] || rmap.opening;
+      return '<span class="sync-badge ' + rv[1] + '">' + rv[0] + '</span>';
+    }
     const v = map[phase] || map.idle;
     return '<span class="sync-badge ' + v[1] + '">' + v[0] + '</span>';
   }
@@ -447,21 +463,88 @@
       '</details>';
   }
 
+  /* ---------- 中转站（v2.11） ----------
+     配对只给一个网址，平板打开即连；内容端到端加密，服务端只转密文。 */
+
+  function relSt() {
+    return (window.Relay && window.Relay.state()) || { phase: 'idle' };
+  }
+
+  function relayPanelHtml() {
+    const r = relSt();
+    if (r.phase === 'wait' || r.phase === 'opening') {
+      return '<div class="notice info">让平板扫下面的二维码，或者把网址发给它。' +
+        '配对信息会自动交换，不用来回粘文字。</div>' +
+        qrMarkup(r.url || '') +
+        '<div class="relay-code"><span class="rc-label">配对码</span><strong>' + UI.esc(r.code || '') + '</strong></div>' +
+        '<p class="inline-hint">相机扫不出就手输网址：<b>' + UI.esc(r.url || '') + '</b></p>' +
+        '<button class="btn block" data-relay-copy type="button">复制网址</button>' +
+        '<p class="inline-hint" style="text-align:center">网址只在这台电脑开着中转时有效，关掉即失效。</p>' +
+        '<button class="btn block" data-sync-reset type="button">关闭中转</button>';
+    }
+    if (r.phase === 'connecting') {
+      return '<div class="notice info">' + UI.esc(r.message || '正在建立直连…') + '</div>' +
+        '<div class="sync-progress"><div class="sp-head"><span>交换配对信息</span><span class="sp-num"></span></div>' +
+        '<div class="sp-bar"><i style="width:60%"></i></div></div>' +
+        '<p class="inline-hint" style="text-align:center">连上之后自动开始同步，不需要再点任何东西。</p>' +
+        '<button class="btn block" data-sync-reset type="button">取消</button>';
+    }
+    if (r.phase === 'error') {
+      return '<div class="notice warn">' + UI.esc(r.lastError || '中转出错') + '</div>' +
+        '<button class="btn primary block" data-relay-desk type="button">重新开启中转</button>';
+    }
+    return '';
+  }
+
+  function relayEntryHtml() {
+    return '<div class="sync-role">' +
+      '<button class="btn primary block" data-relay-desk type="button">这台是电脑，开启中转</button>' +
+      '<p class="inline-hint" style="text-align:center">电脑上运行着本机服务时用这条：平板打开网址就自动连、自动同步</p>' +
+      '<button class="btn block" data-relay-phone type="button">这台是平板，扫码连接电脑</button>' +
+      '<p class="inline-hint" style="text-align:center">扫电脑屏幕上的网址二维码</p>' +
+      '</div>' +
+      '<details class="sync-manual">' +
+      '<summary>这条通道安全吗</summary>' +
+      '<p class="inline-hint">连接只在本机局域网内，公网地址一律被拒绝。' +
+      '中转服务只转发两段配对信息，不接触文件内容、不写磁盘，闲置十分钟自动销毁；' +
+      '文件走 WebRTC 数据通道，由 DTLS 端到端加密，与直接扫码传输的强度相同。' +
+      '如果担心同网段有人做中间人，仍可用下面「生成配对码 → 扫码」的离线交换方式。</p>' +
+      '</details>';
+  }
+
+  function legacyEntryHtml() {
+    /* 中转要本机服务在跑；没有服务、或在纯静态部署上打开时，
+       下面这组按钮就是唯一能用的路，所以不折叠 */
+    const relayOk = !!(window.Relay && window.Relay.supported() && window.Relay.available() !== false);
+    return '<p class="inline-hint" style="text-align:center;margin:10px 0 6px">' +
+      (relayOk ? '或者：扫码配对（不依赖本机服务）' : '扫码配对') + '</p>' +
+      '<div class="sync-role">' +
+      '<button class="btn block" data-sync-desk type="button">这台是电脑，生成配对码</button>' +
+      '<button class="btn block" data-sync-phone type="button">这台是手机，扫描电脑二维码</button>' +
+      '</div>';
+  }
+
   function panelHtml() {
     const st = window.Sync ? window.Sync.state() : { connected: false };
+    const rel = relSt();
     let main = '';
+
+    /* 中转站只负责配对：连上（done）之后交回原流程，勾选与进度都复用 */
+    if (rel.phase && rel.phase !== 'idle' && rel.phase !== 'done') {
+      return '<div class="sync-panel">' +
+        '<div class="sync-head">' + statusBadge() +
+        '<span class="sync-role-tag">' + (rel.role === 'desk' ? '电脑端' : '平板端') +
+        (window.APP_VERSION ? ' · v' + window.APP_VERSION : '') + '</span>' +
+        '</div>' + relayPanelHtml() + '</div>';
+    }
 
     if (!window.Sync || !window.Sync.isSupported()) {
       main = '<div class="notice warn">当前浏览器不支持局域网直连（WebRTC），请用 Chrome、Edge 或 Safari 打开。</div>';
     } else if (phase === 'idle' || phase === 'error') {
       main =
         (lastError ? '<div class="notice warn">' + UI.esc(lastError) + '</div>' : '') +
-        '<div class="sync-role">' +
-        '<button class="btn primary block" data-sync-desk type="button">这台是电脑，生成配对码</button>' +
-        '<p class="inline-hint" style="text-align:center">电脑生成二维码，手机扫码后开始传输</p>' +
-        '<button class="btn block" data-sync-phone type="button">这台是手机，扫描电脑二维码</button>' +
-        '<p class="inline-hint" style="text-align:center">手机端扫描电脑屏幕上的二维码</p>' +
-        '</div>';
+        (window.Relay && window.Relay.supported() && window.Relay.available() !== false ? relayEntryHtml() : '') +
+        legacyEntryHtml();
     } else if (phase === 'offer') {
       main =
         '<div class="notice info">让手机/平板扫下面的二维码（同一 WiFi 下）。扫完那台设备会给你一段<strong>返回码</strong>，' +
@@ -521,8 +604,8 @@
         : '') +
       ((phase === 'select' || phase === 'done') ? bulkHintHtml() : '') +
       '<div class="notice info" style="margin-top:6px">' +
-      '数据只在两台设备之间直连传输，不经过任何服务器，也不需要登录。' +
-      '建议两端连接同一个 WiFi；手机切到后台时连接会断开，回到前台重新配对即可。' +
+      '文件只在这两台设备之间直连，不经过任何服务器，也不需要登录。' +
+      '建议两端连同一个 WiFi；手机切到后台时连接会断开，回到前台重新配对即可。' +
       '</div>' +
       '</div>';
   }
@@ -567,10 +650,52 @@
     }
   }
 
+  /* ---------- 中转站入口 ---------- */
+
+  async function startRelayDesk() {
+    role = 'desk';
+    relayAuto = true;
+    lastError = '';
+    try {
+      await window.Relay.open();
+      render();
+    } catch (e) {
+      lastError = (e && e.message) || '开启中转失败';
+      setPhase('error');
+    }
+  }
+
+  async function joinRelay(sid, code) {
+    role = 'phone';
+    relayAuto = true;
+    lastError = '';
+    try {
+      await window.Relay.join(sid, code);
+      render();
+    } catch (e) {
+      lastError = (e && e.message) || '连接中转失败';
+      setPhase('error');
+    }
+  }
+
+  function startRelayPhone() {
+    scanCode(function (text) {
+      const m = /relay=([0-9a-f]{6,32})\.(\d{6})/.exec(String(text || ''));
+      if (!m) { UI.toast('这不是中转网址二维码', 'err'); return; }
+      joinRelay(m[1], m[2]);
+    }, { autoCamera: true });
+  }
+
   function bind() {
     if (!bodyEl) return;
     const b = bodyEl;
 
+    const relDesk = b.querySelector('[data-relay-desk]');
+    if (relDesk) relDesk.onclick = startRelayDesk;
+    const relPhone = b.querySelector('[data-relay-phone]');
+    if (relPhone) relPhone.onclick = startRelayPhone;
+    const relCopy = b.querySelector('[data-relay-copy]');
+    if (relCopy) relCopy.onclick = function () { copyCode(relSt().url, '网址'); };
     const deskBtn = b.querySelector('[data-sync-desk]');
     if (deskBtn) deskBtn.onclick = startDesk;
     const phoneBtn = b.querySelector('[data-sync-phone]');
@@ -578,6 +703,9 @@
     const resetBtn = b.querySelector('[data-sync-reset]');
     if (resetBtn) {
       resetBtn.onclick = function () {
+        if (window.Relay && window.Relay.state().phase !== 'idle') {
+          window.Relay.disconnect().catch(function () { /* 忽略 */ });
+        }
         window.Sync.disconnect();
         autoStarted = false;
         offerSdp = '';
@@ -588,6 +716,7 @@
         pickRows = [];
         picked = new Set();
         auditInfo = null;
+        relayAuto = false;
         setPhase('idle');
       };
     }
@@ -733,6 +862,7 @@
   function openPanel(opts) {
     opts = opts || {};
     const st = window.Sync ? window.Sync.state() : { connected: false };
+    const deep = window.Relay ? window.Relay.parseHash() : null;
     /* 已连接时重开面板直接显示连接态；select / done 这类「有未完成操作」的阶段要保留，
        否则关一下面板再打开，勾选列表就没了 */
     if (!st.connected) phase = 'idle';
@@ -743,7 +873,7 @@
     progressText = st.connected ? (progressText || '已连接') : '';
     syncedCount = st.connected ? syncedCount : 0;
     lastError = '';
-    role = st.role || 'desk';
+    role = deep ? 'phone' : (st.role || 'desk');
 
     UI.openDrawer('局域网同步', panelHtml(), function (body) {
       bodyEl = body;
@@ -751,6 +881,24 @@
       /* 从折叠菜单「扫码连接电脑」进来：手机端直接开始扫码 */
       if (opts.scan && window.Sync && window.Sync.isSupported() && !st.connected) {
         setTimeout(function () { startPhone(); }, 320);
+      }
+      /* 扫网址进来（地址里带 #relay=…）：自动连上，不用再点按钮 */
+      if (deep && window.Relay && window.Relay.supported()) {
+        setTimeout(function () { joinRelay(deep.sid, deep.code); }, 320);
+      }
+      if (window.Relay && !window.Relay.__bound) {
+        window.Relay.__bound = true;
+        window.Relay.on('state', function () {
+          if (!bodyEl) return;
+          render();
+        });
+        window.Relay.on('progress', function () {
+          if (!bodyEl) return;
+          render();
+        });
+        window.Relay.on('error', function (e) {
+          if (e && e.message) UI.toast(e.message, 'err');
+        });
       }
       if (window.Sync && !window.Sync.__bound) {
         window.Sync.__bound = true;
@@ -805,6 +953,19 @@
           rows.sort(function (a, b) { return String(a.name).localeCompare(String(b.name), 'zh'); });
           /* 差额为空时电脑端会自动收尾，这一轮可能已经结束了，别再插一脚 */
           if (!window.Sync.state().busy) return;
+          if (relayAuto && role === 'desk') {
+            pickRows = rows;
+            picked = new Set(rows.map(function (r) { return r.id; }));
+            auditInfo = null;
+            percent = 0;
+            syncedCount = 0;
+            setPhase('syncing', '自动发送 ' + rows.length + ' 份');
+            window.Sync.sendSelected(rows.map(function (r) { return r.id; })).catch(function (e) {
+              lastError = (e && e.message) || '发送失败';
+              setPhase('error');
+            });
+            return;
+          }
           pickRows = rows;
           picked = new Set(rows.map(function (r) { return r.id; }));
           auditInfo = null;
