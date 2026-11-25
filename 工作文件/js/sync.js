@@ -732,18 +732,26 @@
 
   function waitBuffer() {
     return new Promise(function (resolve) {
-      if (!dc || dc.readyState !== 'open') return resolve();
-      if (dc.bufferedAmount < BUFFER_HIGH) return resolve();
-      const onLow = function () {
-        dc.removeEventListener('bufferedamountlow', onLow);
+      /* 这里必须抓住当时的通道句柄：等待期间如果断开配对，dc 会被置空，
+         定时器或回调里再去读 dc.xxx 就会抛 null 错误（同步结束时必现） */
+      const ch = dc;
+      if (!ch || ch.readyState !== 'open') return resolve();
+      if (ch.bufferedAmount < BUFFER_HIGH) return resolve();
+      let done = false;
+      const finish = function () {
+        if (done) return;
+        done = true;
+        try { ch.removeEventListener('bufferedamountlow', onLow); } catch (e) { /* 通道已销毁 */ }
         resolve();
       };
-      dc.bufferedAmountLowThreshold = BUFFER_HIGH / 2;
-      dc.addEventListener('bufferedamountlow', onLow);
-      setTimeout(function () {
-        dc.removeEventListener('bufferedamountlow', onLow);
-        resolve();
-      }, 4000);
+      const onLow = function () { finish(); };
+      try {
+        ch.bufferedAmountLowThreshold = BUFFER_HIGH / 2;
+        ch.addEventListener('bufferedamountlow', onLow);
+      } catch (e) {
+        return resolve();
+      }
+      setTimeout(finish, 4000);
     });
   }
 
