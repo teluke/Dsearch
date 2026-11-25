@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.10.1';
+  window.APP_VERSION = '2.10.2';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'archive', 'records', 'stats', 'events', 'search', 'settings'];

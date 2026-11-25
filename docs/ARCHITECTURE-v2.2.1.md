@@ -181,7 +181,8 @@ db.version(3).stores({           // v3 仅新增表，不改变既有表结构
 
 | 阶段 | 机制 |
 | --- | --- |
-| 配对 | WebRTC DataChannel，`iceServers: []`（只走 host candidate，同 WiFi 直连）；SDP 用 `deflate-raw` 压缩 + base64（约 633 字符）以塞进二维码；双向可扫 |
+| 配对 | WebRTC DataChannel，`iceServers: []`（只走 host candidate，同 WiFi 直连）；SDP 用 `deflate-raw` 压缩 + base64 以塞进二维码；双向可扫 |
+| 配对码瘦身 | 多网卡设备（平板：Wi-Fi + 蜂窝 + IPv6 + VPN）会给每个网卡生成候选，把配对码撑到两三千字符、二维码扫不出。`trimSdp()` 在候选超过 3 条时只留内网 IPv4（`10/172.16-31/192.168`），按 `192.168` > `10` > `172` 取前 3 条，其余砍掉；`waitIce()` 拿到内网 IPv4 后 700ms 无新候选即收工（上限 8s）。返回码超过 900 字符时不再画二维码，改为复制文字 |
 | 传输 | 16KB 二进制分块（8 字节头：id + seq），`bufferedAmount` 背压 |
 | 大消息 | 浏览器对单条消息有硬上限（Chrome `maxMessageSize = 262144`）。凡 JSON 超过 100KB 就用 `sendLarge()` 切成 12KB 片（`frag` 消息），对端重组后再派发；清单、`doc-begin`、`doc-meta-only`、`memo`、`folders`、`plan`、`audit` 都走这条路 |
 | 增量 | 清单携带每条 `updatedAt + originId`，只传新增/更新 |

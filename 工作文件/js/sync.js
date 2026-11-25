@@ -164,15 +164,46 @@
     stats = { sent: 0, recv: 0, bytes: 0, startedAt: 0 };
   }
 
+  /* 等 ICE 收集结束。平板网卡多，收集慢，但同 WiFi 只要有内网 IPv4 候选就够用，
+     所以「拿到内网 IPv4 且候选不再新增」就收工，最多等 8 秒。 */
   function waitIce(conn) {
     return new Promise(function (resolve) {
       if (conn.iceGatheringState === 'complete') return resolve();
       let done = false;
-      const finish = function () { if (!done) { done = true; resolve(); } };
-      const timer = setTimeout(finish, 4000);
-      conn.addEventListener('icegatheringstatechange', function () {
-        if (conn.iceGatheringState === 'complete') { clearTimeout(timer); finish(); }
+      let lastAt = Date.now();
+      let hasLan = false;
+      let tick = null;
+
+      const finish = function () {
+        if (done) return;
+        done = true;
+        if (tick) clearInterval(tick);
+        clearTimeout(cap);
+        resolve();
+      };
+      const cap = setTimeout(finish, 8000);
+
+      const check = function () {
+        if (conn.iceGatheringState === 'complete') return finish();
+        if (hasLan && Date.now() - lastAt > 700) return finish();
+      };
+
+      conn.addEventListener('icecandidate', function (e) {
+        lastAt = Date.now();
+        if (!e.candidate) return finish();   /* null = 收集结束 */
+        const raw = e.candidate.candidate || '';
+        const parts = raw.split(' ');
+        const addr = e.candidate.address || parts[4] || '';
+        if (isLanV4(addr)) hasLan = true;
       });
+      conn.addEventListener('icegatheringstatechange', function () {
+        if (conn.iceGatheringState === 'complete') finish();
+      });
+
+      tick = setInterval(function () {
+        if (done) return;
+        check();
+      }, 200);
     });
   }
 
@@ -267,6 +298,53 @@
     send({ t: 'hello', proto: PROTO, role: 'desk', device: '电脑' });
   }
 
+  /* ---------- 配对码瘦身 ----------
+     平板/多网卡设备会攒出十几个 ICE 候选（WiFi、蜂窝、IPv6、VPN 都有），
+     全塞进 SDP 后配对码能到两三千字符，二维码密到扫不出来、也过不了微信压缩。
+     同 WiFi 直连真正用得上的只有「内网 IPv4 host 候选」，其余全是噪音。
+     保守策略：一个内网 IPv4 都找不到时原样返回，绝不把连接搞坏。 */
+
+  function isLanV4(addr) {
+    if (!addr || addr.indexOf(':') >= 0) return false;
+    return /^10\./.test(addr) || /^192\.168\./.test(addr) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(addr);
+  }
+
+  function trimSdp(sdp) {
+    const text = String(sdp || '');
+    /* 末尾的空行是 SDP 的结束标记，必须留在最后；先剔干净再自己补 */
+    const lines = text.split(/\r?\n/).filter(function (l) { return l.length > 0; });
+    const cand = [];
+    const rest = [];
+    lines.forEach(function (l) {
+      if (l.indexOf('a=candidate:') === 0) cand.push(l);
+      else rest.push(l);
+    });
+    /* 候选本来就不多，没必要动 */
+    if (cand.length <= 3) return text;
+
+    const lan = [];
+    cand.forEach(function (l) {
+      const p = l.split(' ');
+      const addr = p[4] || '';
+      if (isLanV4(addr)) lan.push({ line: l, addr: addr });
+    });
+    if (!lan.length) return text;
+
+    /* 优先 192.168 网段（家用路由器最常见），最多留 3 条 */
+    lan.sort(function (a, b) {
+      const score = function (x) {
+        if (/^192\.168\./.test(x.addr)) return 0;
+        if (/^10\./.test(x.addr)) return 1;
+        return 2;
+      };
+      return score(a) - score(b) || (a.addr < b.addr ? -1 : 1);
+    });
+    const keep = lan.slice(0, 3).map(function (x) { return x.line; });
+
+    return rest.concat(keep).join('\r\n') + '\r\n';
+  }
+
   /* 电脑端：生成配对码（offer） */
   async function createOffer() {
     reset();
@@ -279,7 +357,7 @@
     await pc.setLocalDescription(offer);
     await waitIce(pc);
     emit('state', state());
-    return pc.localDescription.sdp;
+    return trimSdp(pc.localDescription.sdp);
   }
 
   /* 手机端：接收 offer，返回 answer */
@@ -297,7 +375,7 @@
     await pc.setLocalDescription(ans);
     await waitIce(pc);
     emit('state', state());
-    return pc.localDescription.sdp;
+    return trimSdp(pc.localDescription.sdp);
   }
 
   /* 电脑端：接收手机返回的 answer */
@@ -1099,6 +1177,7 @@
     startSync: startSync,
     sendSelected: sendSelected,
     plan: function () { return lastPlan; },
+    trimSdp: trimSdp,
     disconnect: disconnect,
     isSupported: function () { return !!(window.RTCPeerConnection && window.RTCPeerConnection.prototype.createDataChannel); }
   };

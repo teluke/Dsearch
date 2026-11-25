@@ -48,19 +48,29 @@
   }
 
   async function unpack(text) {
-    const kind = String(text || '').trim().charAt(0);
-    const data = String(text || '').trim().slice(1);
+    /* 粘贴回来的东西经常夹带换行和空格，base64 里本来就没有空白，一律去掉 */
+    const raw = String(text || '').replace(/\s+/g, '');
+    const kind = raw.charAt(0);
+    const data = raw.slice(1);
     if (kind === 'z') {
       const stream = new Blob([unb64(data)]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
       const json = await new Response(stream).text();
       return JSON.parse(json);
     }
     if (kind === 'p') return JSON.parse(decodeURIComponent(escape(atob(data))));
-    return JSON.parse(data);
+    return JSON.parse(raw);
   }
+
+  /* 二维码超过这个长度就基本扫不出来了，也不再画（画出来也只是浪费时间） */
+  const QR_MAX = 900;
 
   function qrMarkup(text) {
     if (!window.qrcode) return '<div class="qr-fallback">二维码组件未加载</div>';
+    if (!text) return '<div class="qr-fallback">正在生成…</div>';
+    if (text.length > QR_MAX) {
+      return '<div class="qr-fallback">返回码有 ' + text.length + ' 字符，二维码密到扫不出来，' +
+        '也会被微信压坏。<br>请用下面的「复制返回码」发文字过去。</div>';
+    }
     try {
       const qr = window.qrcode(0, 'L');
       qr.addData(text);
@@ -68,7 +78,7 @@
       /* margin 4：二维码静区不足时，截图识别率会明显下降 */
       return '<div class="qr-box" data-qr>' + qr.createSvgTag({ cellSize: 5, margin: 4, scalable: true }) + '</div>';
     } catch (e) {
-      return '<div class="qr-fallback">配对码过长，请重试</div>';
+      return '<div class="qr-fallback">返回码有 ' + text.length + ' 字符，超出二维码容量。<br>请用下面的「复制返回码」。</div>';
     }
   }
 
@@ -368,10 +378,17 @@
     return '<span class="sync-badge ' + v[1] + '">' + v[0] + '</span>';
   }
 
+  function codeLenHint(code) {
+    if (!code) return '';
+    const n = code.length;
+    return '<p class="inline-hint">返回码 ' + n + ' 字符' +
+      (n <= QR_MAX ? ' · 二维码可以正常扫描' : ' · 二维码太密扫不出来，请用文字') + '</p>';
+  }
+
   function manualAnswerHtml() {
-    return '<details class="sync-manual">' +
-      '<summary>电脑没有摄像头？粘贴返回码</summary>' +
-      '<textarea class="input" data-answer-text rows="3" placeholder="把手机上的返回码文本粘贴到这里（以 z 或 p 开头的一长串字符）"></textarea>' +
+    return '<details class="sync-manual" open>' +
+      '<summary>粘贴返回码（推荐）</summary>' +
+      '<textarea class="input" data-answer-text rows="3" placeholder="把另一台设备上的返回码粘贴到这里（以 z 或 p 开头的一长串字符）"></textarea>' +
       '<button class="btn primary block" data-answer-use type="button">用这段返回码连接</button>' +
       '</details>';
   }
@@ -447,22 +464,28 @@
         '</div>';
     } else if (phase === 'offer') {
       main =
-        '<div class="notice info">用手机扫描下面的二维码（同一 WiFi 下）。手机扫完会显示一个返回码，' +
-        '再用这台电脑读取：可以直接选手机截图、粘贴截图，或者粘贴返回码文本。</div>' +
+        '<div class="notice info">让手机/平板扫下面的二维码（同一 WiFi 下）。扫完那台设备会给你一段<strong>返回码</strong>，' +
+        '拿回来粘在下面就行。</div>' +
         qrMarkup(offerSdp ? offerSdp : '') +
-        '<button class="btn primary block" data-sync-scan-answer type="button">读取手机返回码</button>' +
+        codeLenHint(offerSdp) +
         manualAnswerHtml() +
+        '<button class="btn block" data-sync-scan-answer type="button">读取手机返回码（选图片）</button>' +
         '<button class="btn block" data-sync-reset type="button">重新生成</button>';
     } else if (phase === 'answer') {
+      /* 返回码优先走文字：图片过一遍微信压缩，密一点的二维码就废了 */
       main =
-        '<div class="notice info">用电脑读取下面的二维码，连接即建立。保持此页面打开，数据会自动传输。</div>' +
+        '<div class="notice info">把这段<strong>返回码</strong>发到电脑上，在电脑端的输入框里粘贴，连接就建立了。' +
+        '文字不会被压缩，比发图片可靠。</div>' +
+        '<button class="btn primary block" data-copy-code type="button">复制返回码</button>' +
+        codeLenHint(answerSdp) +
+        '<details class="sync-manual"' + (answerSdp && answerSdp.length <= QR_MAX ? '' : ' hidden') + '>' +
+        '<summary>或者让电脑扫这张二维码</summary>' +
         qrMarkup(answerSdp ? answerSdp : '') +
-        '<div class="sync-two">' +
         '<button class="btn block" data-save-qr type="button">保存二维码图片</button>' +
-        '<button class="btn block" data-copy-code type="button">复制返回码</button>' +
-        '</div>' +
-        '<p class="inline-hint" style="text-align:center">电脑没有摄像头时：保存图片或复制返回码，用微信发到电脑，' +
-        '在电脑端「读取手机返回码」里选图片或粘贴即可</p>' +
+        '<p class="inline-hint">一定要用「文件」方式发送原图，微信的图片压缩会把二维码糊掉。</p>' +
+        '</details>' +
+        '<p class="inline-hint" style="text-align:center">电脑端如果停在「等待读取」，就是返回码没送到，' +
+        '回去用「复制返回码」发文字。</p>' +
         '<button class="btn block" data-sync-reset type="button">取消</button>';
     } else if (phase === 'select') {
       main = pickPanelHtml();
