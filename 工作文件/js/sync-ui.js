@@ -582,7 +582,12 @@
         ? '<p class="inline-hint">已填：<b>' + UI.esc(base) + '</b>' +
           (avail === false ? ' · 连不上服务，确认电脑已启动 https 服务，并允许本网站访问局域网' : '') +
           '</p>' +
-          (avail === false ? '<button class="btn block" type="button" data-relay-lna>允许访问局域网并重试</button>' : '') +
+          (avail === false
+            ? '<a class="btn block" href="' + UI.esc(base) + '" target="_blank" rel="noopener">' +
+              '先打开电脑地址（处理证书提示）</a>' +
+              '<p class="inline-hint">在新标签页里点「高级 → 继续前往」，回来再点下面这个按钮。</p>' +
+              '<button class="btn block" type="button" data-relay-lna>允许访问局域网并重试</button>'
+            : '') +
           '<button class="btn block" type="button" data-relay-base-clear>清除这个地址</button>'
         : '') +
       '</details>' +

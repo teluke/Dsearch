@@ -1,19 +1,29 @@
 @echo off
-rem 双击启动带自签证书的本地服务。
-rem 线上 https 页面要自动配对，必须用这个（http 会被浏览器按混合内容拦掉）。
-rem 窗口保持开着，同步结束再关。
+rem Double-click to start the local https server. Required when the online
+rem https page needs automatic LAN pairing. Keep this window open while syncing.
 chcp 65001 >nul
 cd /d "%~dp0"
 
+set "NODE_EXE="
 where node >nul 2>nul
-if errorlevel 1 (
-  echo [ERROR] 没找到 Node.js，先安装 Node.js 再运行。
+if not errorlevel 1 set "NODE_EXE=node"
+if not defined NODE_EXE if exist "%ProgramFiles%\nodejs\node.exe" set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+if not defined NODE_EXE if exist "%ProgramFiles(x86)%\nodejs\node.exe" set "NODE_EXE=%ProgramFiles(x86)%\nodejs\node.exe"
+if not defined NODE_EXE if exist "%LOCALAPPDATA%\Programs\Nodejs\node.exe" set "NODE_EXE=%LOCALAPPDATA%\Programs\Nodejs\node.exe"
+if not defined NODE_EXE (
+  for /d %%D in ("%USERPROFILE%\.workbuddy\binaries\node\versions\*") do (
+    if exist "%%~D\node.exe" set "NODE_EXE=%%~D\node.exe"
+  )
+)
+if not defined NODE_EXE (
+  echo [ERROR] Node.js not found. Install Node.js, then run this again.
   pause
   exit /b 1
 )
 
-node server.js --https
+echo Starting HTTPS server with: %NODE_EXE%
+"%NODE_EXE%" server.js --https
 
 echo.
-echo 服务已停止。
+echo Server stopped.
 pause
