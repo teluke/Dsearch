@@ -214,7 +214,10 @@
     opts = opts || {};
     if (!window.jsQR) { UI.toast('扫码组件未加载', 'err'); return; }
 
-    const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && opts.camera !== false;
+    /* 局域网 http 不是安全上下文，浏览器直接不给 mediaDevices（实测 secure:false / media:undefined）。
+       这不是设备没相机，所以文案要说清楚原因，别让人以为平板坏了 */
+    const secure = !!window.isSecureContext;
+    const hasCamera = secure && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && opts.camera !== false;
     const isTouch = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
     const autoCamera = opts.autoCamera != null ? opts.autoCamera : (hasCamera && isTouch);
 
@@ -225,7 +228,9 @@
       '<p class="scan-title hand">读取配对码</p>' +
       '<div class="scan-stage"' + (autoCamera ? '' : ' hidden') + '><video playsinline muted autoplay></video><span class="scan-frame"></span></div>' +
       '<p class="scan-hint" data-scan-hint>' +
-      (hasCamera ? '手机点「打开相机」对准二维码；电脑没有摄像头时，选图片或粘贴截图' : '这台设备没有可用的相机，选择二维码图片或粘贴截图') +
+      (hasCamera ? '手机点「打开相机」对准二维码；电脑没有摄像头时，选图片或粘贴截图'
+        : (secure ? '这台设备没有可用的相机，选择二维码图片或粘贴截图'
+          : '这个网址是局域网 http，浏览器不允许网页调用相机（设备本身没坏）。请用平板自带的相机扫电脑屏幕，或把电脑上的网址粘进来')) +
       '</p>' +
       '<div class="scan-actions">' +
       (hasCamera ? '<button class="btn primary block" data-scan-camera type="button"' + (autoCamera ? ' hidden' : '') + '>打开相机扫描</button>' : '') +
@@ -478,6 +483,10 @@
         qrMarkup(r.url || '') +
         '<div class="relay-code"><span class="rc-label">配对码</span><strong>' + UI.esc(r.code || '') + '</strong></div>' +
         '<p class="inline-hint">相机扫不出就手输网址：<b>' + UI.esc(r.url || '') + '</b></p>' +
+        (window.Relay && window.Relay.base()
+          ? '<p class="inline-hint">平板首次打开这个 https 网址会提示证书不受信任，点「高级 → 继续前往」' +
+            '即可，之后不会再问。文件仍走 WebRTC 加密直连。</p>'
+          : '') +
         '<button class="btn block" data-relay-copy type="button">复制网址</button>' +
         '<p class="inline-hint" style="text-align:center">网址只在这台电脑开着中转时有效，关掉即失效。</p>' +
         '<button class="btn block" data-sync-reset type="button">关闭中转</button>';
@@ -496,13 +505,55 @@
     return '';
   }
 
+  /* 内网 http（不是 localhost）就是非安全上下文：没有相机、没有离线缓存、独立一份库 */
+  function isLanHttp() {
+    if (location.protocol !== 'http:') return false;
+    const h = location.hostname;
+    return !(h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]');
+  }
+
+  function noCam() {
+    return !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  /* 平板扫不了码时的第二条入口：电脑面板能「复制网址」，粘过来一样能连 */
+  function relayPasteHtml() {
+    return '<details class="sync-manual"' + (noCam() ? ' open' : '') + '>' +
+      '<summary>扫不了码？把电脑上的网址粘进来</summary>' +
+      '<p class="inline-hint">在电脑的同步面板点「复制网址」，发到平板（微信发给自己、或粘到输入法剪贴板），' +
+      '再粘到下面。粘完自动连，不用相机、也不用扫码。</p>' +
+      '<div class="lan-jump">' +
+      '<input type="text" data-relay-paste-input placeholder="http://192.168.1.5:5173/index.html#relay=…" autocomplete="off">' +
+      '<button class="btn primary" type="button" data-relay-paste-go>连接</button>' +
+      '</div>' +
+      '</details>';
+  }
+
+  function lanNoticeHtml() {
+    if (!isLanHttp()) return '';
+    return '<details class="sync-manual">' +
+      '<summary>这个地址和线上版本有什么不一样</summary>' +
+      '<p class="inline-hint">当前地址是 <b>' + UI.esc(location.host) + '</b>（局域网 http），浏览器对这类地址有三条限制：' +
+      '① 网页里调不了相机，扫码要用平板自带的相机扫电脑屏幕；' +
+      '② 没有离线缓存，电脑关掉就开不了；' +
+      '③ 文件存在这个网址名下，和线上版本是两份互不相通的库——' +
+      '换回线上地址看到的是线上那份，别以为文件丢了。</p>' +
+      '</details>';
+  }
+
   function relayEntryHtml() {
+    const cam = !noCam();
     return '<div class="sync-role">' +
       '<button class="btn primary block" data-relay-desk type="button">这台是电脑，开启中转</button>' +
       '<p class="inline-hint" style="text-align:center">电脑上运行着本机服务时用这条：平板打开网址就自动连、自动同步</p>' +
-      '<button class="btn block" data-relay-phone type="button">这台是平板，扫码连接电脑</button>' +
-      '<p class="inline-hint" style="text-align:center">扫电脑屏幕上的网址二维码</p>' +
+      (cam
+        ? '<button class="btn block" data-relay-phone type="button">这台是平板，扫码连接电脑</button>' +
+          '<p class="inline-hint" style="text-align:center">扫电脑屏幕上的网址二维码</p>'
+        : '<p class="inline-hint" style="text-align:center">这台设备现在调不了网页相机：' +
+          '平板请用<b>自带的相机</b>扫电脑屏幕上的二维码，扫到网址点开就自动连；' +
+          '或者把电脑上的网址粘进来。</p>') +
       '</div>' +
+      relayPasteHtml() +
       '<details class="sync-manual">' +
       '<summary>这条通道安全吗</summary>' +
       '<p class="inline-hint">连接只在本机局域网内，公网地址一律被拒绝。' +
@@ -512,24 +563,37 @@
       '</details>';
   }
 
-  /* 线上版本（https）用不了中转：本机服务只有 http。
-     很多人平板装的是线上那个图标，一进面板只有扫码，就以为中转没做出来。
-     这里给一条明路：填电脑地址直接跳过去，跳过去中转入口就出现了。 */
+  /* 线上 https 页面：填一次电脑的 https 地址，就能继续用这个网址自动配对。
+     不用换 origin、不用换库。老 http 跳转保留在折叠里，给没有 https 服务的场合用。 */
   function lanJumpHtml() {
-    const https = location.protocol !== 'http:';
-    if (!https) return '';
-    return '<details class="sync-manual">' +
-      '<summary>想用中转同步？先切到电脑的局域网地址</summary>' +
-      '<p class="inline-hint">当前打开的是线上版本（https），它连不到你电脑上的本机服务，' +
-      '所以只能扫码配对。中转要在局域网地址上用：先在电脑上运行 <code>工作文件/server.js</code>，' +
-      '再把下面这个地址填进去跳转（平板和电脑要连同一个 WiFi）。</p>' +
+    if (location.protocol !== 'https:' || isLanHttp()) return '';
+    const base = window.Relay && window.Relay.base ? window.Relay.base() : '';
+    const avail = window.Relay ? window.Relay.available() : null;
+    return '<details class="sync-manual"' + (base ? '' : ' open') + '>' +
+      '<summary>继续用这个网址自动同步（推荐）</summary>' +
+      '<p class="inline-hint">电脑运行 <code>启动服务-https.bat</code>，把打印出来的 https 地址填一次。' +
+      '平板第一次打开这个 https 地址时，浏览器会提示证书不受信任，点「高级 → 继续前往」一次。' +
+      '之后平板扫电脑屏幕上的二维码就自动连，文件仍存在当前这个网址下，不用换地址。</p>' +
+      '<div class="lan-jump">' +
+      '<input type="text" data-relay-base-input placeholder="https://192.168.1.5:5173" autocomplete="off" value="' + UI.esc(base) + '">' +
+      '<button class="btn primary" type="button" data-relay-base-save>' + (base ? '重新检测' : '保存并检测') + '</button>' +
+      '</div>' +
+      (base
+        ? '<p class="inline-hint">已填：<b>' + UI.esc(base) + '</b>' +
+          (avail === false ? ' · 连不上服务，确认电脑已启动 https 服务，并允许本网站访问局域网' : '') +
+          '</p>' +
+          (avail === false ? '<button class="btn block" type="button" data-relay-lna>允许访问局域网并重试</button>' : '') +
+          '<button class="btn block" type="button" data-relay-base-clear>清除这个地址</button>'
+        : '') +
+      '</details>' +
+      '<details class="sync-manual">' +
+      '<summary>老办法：跳到电脑的局域网 http 地址</summary>' +
+      '<p class="inline-hint">那条路不用证书，但会换一份空库，得从电脑重新同步一次；' +
+      '而且 http 地址下网页调不了相机、也没有离线缓存。</p>' +
       '<div class="lan-jump">' +
       '<input type="text" inputmode="decimal" data-lan-input placeholder="例如 192.168.1.5:5173" autocomplete="off">' +
       '<button class="btn primary" type="button" data-lan-go>打开</button>' +
       '</div>' +
-      '<p class="inline-hint">地址在电脑启动服务时会打印出来（形如 192.168.x.x:5173）。' +
-      '注意：换地址等于换了一份本地数据，切过去后这份数据是空的，会从电脑完整同步一次；' +
-      '原来线上地址里的数据不会动。</p>' +
       '</details>';
   }
 
@@ -583,6 +647,7 @@
         (lastError ? '<div class="notice warn">' + UI.esc(lastError) + '</div>' : '') +
         (window.Relay && window.Relay.supported() && window.Relay.available() !== false ? relayEntryHtml() : '') +
         lanJumpHtml() +
+        lanNoticeHtml() +
         legacyEntryHtml();
     } else if (phase === 'offer') {
       main =
@@ -743,10 +808,66 @@
       };
     }
 
+    const baseSave = b.querySelector('[data-relay-base-save]');
+    if (baseSave) {
+      baseSave.onclick = async function () {
+        const inp = b.querySelector('[data-relay-base-input]');
+        try {
+          await window.Relay.setBase(inp ? inp.value : '');
+          render();
+          const ok = window.Relay.available() !== false;
+          UI.toast(ok ? '已连上电脑服务，中转入口已出现' : '地址已保存，电脑上的 https 服务还没连通',
+            ok ? 'ok' : 'warn');
+        } catch (e) {
+          UI.toast((e && e.message) || '地址格式不对', 'err');
+        }
+      };
+    }
+    const baseClear = b.querySelector('[data-relay-base-clear]');
+    if (baseClear) {
+      baseClear.onclick = function () {
+        window.Relay.clearBase();
+        render();
+      };
+    }
+    const lnaBtn = b.querySelector('[data-relay-lna]');
+    if (lnaBtn) {
+      lnaBtn.onclick = async function () {
+        try {
+          await window.Relay.ensureAccess();
+          render();
+          const ok = window.Relay.available() !== false;
+          UI.toast(ok ? '已允许，中转入口已出现' : '还是连不上，检查电脑上的 https 服务',
+            ok ? 'ok' : 'warn');
+        } catch (e) {
+          UI.toast((e && e.message) || '访问被浏览器拦下', 'err');
+        }
+      };
+    }
+
     const relDesk = b.querySelector('[data-relay-desk]');
     if (relDesk) relDesk.onclick = startRelayDesk;
     const relPhone = b.querySelector('[data-relay-phone]');
     if (relPhone) relPhone.onclick = startRelayPhone;
+
+    /* 平板粘网址：同址直接连，异址跳过去（跳过去那边页面自己会 join） */
+    const pasteGo = b.querySelector('[data-relay-paste-go]');
+    if (pasteGo) {
+      pasteGo.onclick = function () {
+        const inp = b.querySelector('[data-relay-paste-input]');
+        const raw = String((inp && inp.value) || '').replace(/\s+/g, '');
+        if (!raw) { UI.toast('先粘贴电脑上「复制网址」得到的那个网址', 'err'); return; }
+        const m = /relay=([0-9a-f]{6,32})\.(\d{6})/.exec(raw);
+        if (!m) { UI.toast('这段里没有配对信息，要粘带 #relay=… 的完整网址', 'err'); return; }
+        let sameHost = true;
+        try {
+          const u = new URL(raw, location.href);
+          sameHost = u.host === location.host;
+        } catch (e) { /* 只有 #relay=… 的片段，按本页处理 */ }
+        if (!sameHost) { location.href = raw; return; }
+        joinRelay(m[1], m[2]);
+      };
+    }
     const relCopy = b.querySelector('[data-relay-copy]');
     if (relCopy) relCopy.onclick = function () { copyCode(relSt().url, '网址'); };
     const deskBtn = b.querySelector('[data-sync-desk]');

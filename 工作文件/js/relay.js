@@ -20,6 +20,7 @@
 
   const POLL_STATUS = 1200;
   const POLL_SIG = 800;
+  const BASE_KEY = 'dsearch.relayBase';
 
   const S = {
     phase: 'idle',      // idle | wait | connecting | done | error
@@ -77,19 +78,79 @@
 
   function available() { return S.available; }
 
-  /* 中转只可能发生在局域网 http 上：本机服务没有 https。
-     纯静态部署（GitHub Pages）是 https，直接判定不可用——
-     省掉一次必然 404 的探测，入口也不会先闪一下再消失。 */
+  function isLocalHost(h) {
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]') return true;
+    return /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+  }
+
+  /* 线上 https 页面（Pages）要访问本机中转，得先记一次电脑的 https 地址。
+     只收私网 IP / localhost，避免把页面指到公网服务上去。 */
+  function normalizeBase(text) {
+    let v = String(text || '').trim().replace(/\s+/g, '');
+    if (!v) return '';
+    if (!/^https:\/\//i.test(v)) v = 'https://' + v;
+    let u;
+    try { u = new URL(v); } catch (e) { return ''; }
+    if (!isLocalHost(u.hostname)) return '';
+    return u.origin + (u.pathname === '/' ? '/' : u.pathname.replace(/\/[^/]*$/, '/'));
+  }
+
+  function configuredBase() {
+    try { return normalizeBase(localStorage.getItem(BASE_KEY) || ''); }
+    catch (e) { return ''; }
+  }
+
+  function setBase(text) {
+    const v = normalizeBase(text);
+    if (!v) throw new Error('填电脑的局域网 https 地址，例如 https://192.168.1.5:5173');
+    try { localStorage.setItem(BASE_KEY, v); } catch (e) { /* 无痕模式也能用本次会话 */ }
+    S.available = null;
+    emit('ready', { available: null });
+    return probe();
+  }
+
+  function clearBase() {
+    try { localStorage.removeItem(BASE_KEY); } catch (e) { /* 忽略 */ }
+    S.available = null;
+  }
+
+  /* Chrome 的本地网络访问（LNA）权限：public 页面请求 192.168.x.x 时，
+     必须由用户手势触发才会弹「允许访问局域网」。页面加载时直接探测会被静默拒绝。 */
+  function lnaState() {
+    if (!navigator.permissions || !navigator.permissions.query) return Promise.resolve('unknown');
+    return navigator.permissions.query({ name: 'local-network' })
+      .then(function (s) { return s.state; }).catch(function () { return 'unknown'; });
+  }
+
+  async function ensureAccess() {
+    const st = await lnaState();
+    if (st === 'denied') {
+      throw new Error('浏览器已拒绝本地网络访问：点地址栏左侧图标 → 网站设置 → 本地网络 → 允许');
+    }
+    S.available = null;
+    try { await fetch(apiUrl('addr'), { cache: 'no-store', credentials: 'omit' }); }
+    catch (e) { /* 交给 probe 给结论 */ }
+    return probe();
+  }
+
+  /* 三种可用的位置：
+     1) 内网 http 页面（旧路，本机服务跑 http）
+     2) 本机 https 页面（平板扫码打开的那个，同源接口）
+     3) 线上 https 页面 + 已配置的内网 https 地址（方案三） */
   function supported() {
-    if (location.protocol !== 'http:') return false;
-    return !!(window.Sync && window.Sync.isSupported && window.Sync.isSupported() && window.fetch);
+    if (!(window.Sync && window.Sync.isSupported && window.Sync.isSupported() && window.fetch)) return false;
+    if (location.protocol === 'http:') return true;
+    if (location.protocol === 'https:') return !!configuredBase() || isLocalHost(location.hostname);
+    return false;
   }
 
   /* ---------------- 接口 ---------------- */
 
   function apiUrl(name) {
-    const base = location.pathname.replace(/[^/]*$/, '');
-    return base + 'api/relay/' + name;
+    const base = configuredBase();
+    if (base) return base + 'api/relay/' + name;
+    const p = location.pathname.replace(/[^/]*$/, '');
+    return p + 'api/relay/' + name;
   }
 
   async function api(name, opts) {
@@ -121,6 +182,8 @@
 
   /* 电脑端一般是 localhost 打开的，二维码里必须换成平板能访问的内网地址 */
   async function lanOrigin() {
+    const configured = configuredBase();
+    if (configured) return configured.replace(/\/$/, '');
     const host = location.hostname;
     const isLoop = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
     if (!isLoop) return location.origin;
@@ -163,7 +226,8 @@
     S.sid = r.sid; S.code = r.code; S.token = r.token;
     /* 二维码里只有网址和一次性会话号：几十个字符，不会密到扫不出 */
     const host = await lanOrigin();
-    S.url = host + location.pathname + '#relay=' + r.sid + '.' + r.code;
+    const page = configuredBase() ? '/index.html' : location.pathname;
+    S.url = host + page + '#relay=' + r.sid + '.' + r.code;
     setPhase('wait', '等平板扫码');
     startStatusPoll();
     return state();
@@ -328,7 +392,14 @@
 
   /* 地址里带 #relay=… 就是扫了电脑的网址：等界面就绪后自己把同步面板打开。
      放在这里而不是 app.js，是为了不依赖两者的加载顺序 */
-  if (supported()) probe();
+  if (supported()) {
+    if (configuredBase() && location.protocol === 'https:' && !isLocalHost(location.hostname)) {
+      /* 线上页 + 已存地址：权限是 prompt 时别在加载阶段探测，等用户点按钮 */
+      lnaState().then(function (s) { if (s !== 'prompt') probe(); });
+    } else {
+      probe();
+    }
+  }
 
   if (parseHash()) {
     let tries = 0;
@@ -347,6 +418,11 @@
     supported: supported,
     available: available,
     probe: probe,
+    base: configuredBase,
+    setBase: setBase,
+    clearBase: clearBase,
+    lnaState: lnaState,
+    ensureAccess: ensureAccess,
     open: openDesk,
     join: join,
     parseHash: parseHash,
