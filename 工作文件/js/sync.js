@@ -18,6 +18,8 @@
   const CHUNK = 16 * 1024;            // 单个数据块 16KB
   const SAFE_MSG = 100 * 1024;        // 单条 JSON 消息的安全字节上限
   const FRAG = 12 * 1024;             // 超限消息的切片长度（按字符，中文最多 3 字节/字）
+  const LEGACY_SLICE = 40 * 1024;     // 旧版本清单分片大小（兼容用）
+  const LEGACY_WAIT = 6000;           // 等不到新协议回应就切兼容模式
   const BUFFER_HIGH = 1024 * 1024;    // 发送缓冲上限 1MB
   const AUDIT_WAIT = 45000;           // 等对账结果的兜底时间
 
@@ -33,6 +35,12 @@
 
   let fragBox = {};           // 分片重组：bid -> { parts:[], total }
   let fragSeq = 0;
+
+  let peerProto = PROTO;      // 对端协议版本（收到 hello 后才知道真实的）
+  let legacyTimer = null;     // 等不到对端新协议回应时的兼容模式切换
+  let manifestParts = [];     // 旧版本清单分片（兼容用）
+  let manifestTotal = 0;
+  let lastManifest = null;    // 本轮清单对象，切兼容模式时重新按旧格式发
 
   let expectIds = [];         // 手机端：本轮应收到哪些 id
   let gotIds = {};            // 手机端：已成功入库的 id
@@ -58,13 +66,79 @@
   }
 
   function state() {
-    return { connected: connected, role: role, busy: busy, stats: Object.assign({}, stats) };
+    return {
+      connected: connected,
+      role: role,
+      busy: busy,
+      proto: PROTO,
+      peerProto: peerProto,
+      legacy: peerProto !== PROTO,
+      stats: Object.assign({}, stats)
+    };
   }
+
+  /* ---------- 新旧版本兼容 ----------
+     协议 2 的清单是一条大消息 + plan/go 协商；协议 1 是分片清单 + 直接点单。
+     两端版本不一致时不能干等，-- 等不到对端新协议回应就自动退回旧格式。 */
+
+  function startLegacyTimer() {
+    stopLegacyTimer();
+    /* 已经握手知道对端是旧版本就几乎立刻退回，否则等一会儿看有没有新协议回应 */
+    const delay = peerProto === PROTO ? LEGACY_WAIT : 800;
+    legacyTimer = setTimeout(function () {
+      legacyTimer = null;
+      if (!busy || !connected) return;
+      toLegacy().catch(function () { /* 连接已断 */ });
+    }, delay);
+  }
+
+  function stopLegacyTimer() {
+    if (legacyTimer) { clearTimeout(legacyTimer); legacyTimer = null; }
+  }
+
+  async function toLegacy() {
+    peerProto = 1;
+    emit('peer-old', { proto: 1 });
+    if (role === 'desk') await sendLegacyManifest();
+    else if (lastPlan) send({ t: 'need', ids: lastPlan.need || [] });
+  }
+
+  /* 电脑端：把清单按旧格式（40KB 分片）再发一遍，旧手机端才认 */
+  async function sendLegacyManifest() {
+    if (!lastManifest) return;
+    let json;
+    try { json = JSON.stringify(lastManifest); } catch (e) { return; }
+    const parts = sliceString(json, LEGACY_SLICE);
+    for (let i = 0; i < parts.length; i++) {
+      send({ t: 'manifest-part', seq: i, total: parts.length, data: parts[i] });
+      if (i % 10 === 0) await sleep(0);
+    }
+    send({ t: 'manifest-end', total: parts.length, count: (lastManifest.docs || []).length });
+    emit('progress', {
+      stage: '手机端是旧版本，已按兼容模式重新发送清单',
+      current: 0, total: (lastManifest.docs || []).length, bytes: 0
+    });
+  }
+
+  /* 手机端：收到旧格式清单，重组后照常走 onManifest */
+  function onLegacyManifest() {
+    const json = manifestParts.join('');
+    manifestParts = [];
+    manifestTotal = 0;
+    let mf;
+    try { mf = JSON.parse(json); } catch (e) {
+      emit('error', { message: '清单解析失败，请重新配对' });
+      return;
+    }
+    onManifest(mf);
+  }
+
 
   /* ---------- 连接 ---------- */
 
   function reset() {
     stopWatch();
+    stopLegacyTimer();
     if (auditTimer) { clearTimeout(auditTimer); auditTimer = null; }
     try { if (dc) dc.close(); } catch (e) { /* 忽略 */ }
     try { if (pc) pc.close(); } catch (e) { /* 忽略 */ }
@@ -76,6 +150,10 @@
     remoteMeta = {};
     fragBox = {};
     fragSeq = 0;
+    peerProto = PROTO;
+    manifestParts = [];
+    manifestTotal = 0;
+    lastManifest = null;
     expectIds = [];
     gotIds = {};
     lastPlan = null;
@@ -152,7 +230,7 @@
   }
 
   /* 大消息自动切片：返回 false 表示通道已断或发送失败，调用方必须处理 */
-  function sendLarge(obj) {
+  async function sendLarge(obj) {
     if (!dc || dc.readyState !== 'open') return false;
     let json;
     try { json = JSON.stringify(obj); } catch (e) { return false; }
@@ -161,6 +239,8 @@
     const parts = sliceString(json, FRAG);
     const bid = ++fragSeq;
     for (let i = 0; i < parts.length; i++) {
+      /* 几 MB 的清单一次灌满发送缓冲会被丢掉，按缓冲水位让一下 */
+      if (i % 8 === 0) await waitBuffer();
       const ok = send({ t: 'frag', bid: bid, seq: i, total: parts.length, data: parts[i] });
       if (!ok) return false;
     }
@@ -237,10 +317,10 @@
   function handleText(msg) {
     switch (msg.t) {
       case 'hello':
-        /* 两端版本必须一致：手机端拿到旧页面时协议对不上，早报错比卡住好 */
-        if (msg.proto !== PROTO) {
-          emit('error', { message: '两台设备的版本不一致（电脑 ' + msg.proto + ' / 手机 ' + PROTO + '），请在两端都刷新页面后重新配对' });
-          return;
+        /* 对端版本只做记录，不阻断：旧版本走兼容模式，见 fallbackLegacy* */
+        peerProto = msg.proto || 1;
+        if (peerProto !== PROTO) {
+          emit('peer-old', { proto: peerProto });
         }
         emit('progress', { stage: '握手完成', current: 0, total: 0, bytes: 0 });
         break;
@@ -251,6 +331,16 @@
 
       case 'manifest':
         onManifest(msg);
+        break;
+
+      /* 旧版本（PROTO 1）的清单分片：新端照样能收，方便新旧混用 */
+      case 'manifest-part':
+        manifestParts[msg.seq] = msg.data;
+        manifestTotal = msg.total || manifestTotal;
+        break;
+
+      case 'manifest-end':
+        onLegacyManifest();
         break;
 
       case 'plan':
@@ -266,6 +356,9 @@
         break;
 
       case 'need':
+        /* 旧版本手机端直接点单：按兼容模式发送，不做对账（旧端不会回报） */
+        stopLegacyTimer();
+        peerProto = peerProto === PROTO ? 1 : peerProto;
         sendDocs(msg.ids || []);
         break;
 
@@ -376,7 +469,8 @@
       return c;
     });
 
-    const ok = sendLarge({ t: 'manifest', proto: PROTO, docs: metas, series: series, memos: memos, folders: folders });
+    lastManifest = { t: 'manifest', proto: PROTO, docs: metas, series: series, memos: memos, folders: folders };
+    const ok = await sendLarge(lastManifest);
     if (!ok) {
       busy = false;
       emit('error', { message: '清单发送失败，连接可能已断开，请重新配对' });
@@ -384,10 +478,13 @@
       return;
     }
     emit('progress', { stage: '等待手机端核对差额（共 ' + metas.length + ' 份）', current: 0, total: metas.length, bytes: 0 });
+    /* 手机端若是旧版本，不认识这条清单，6 秒后自动改发旧格式 */
+    startLegacyTimer();
   }
 
   /* 手机端算完差额后回报：电脑端据此弹出选择面板 */
   function onPlan(msg) {
+    stopLegacyTimer();
     lastPlan = { need: msg.need || [], total: msg.total || 0, metaOnly: msg.metaOnly || 0, sizes: msg.sizes || {} };
     emit('plan', lastPlan);
     /* 手机端没有任何缺失时不必让用户空等，直接放行 */
@@ -459,6 +556,13 @@
   /* 对账兜底：手机端迟迟不回报结果时不要让界面永远卡在「同步中」 */
   function armAudit() {
     if (auditTimer) clearTimeout(auditTimer);
+    /* 旧版本对端不会回报对账，直接收尾 */
+    if (peerProto !== PROTO) {
+      busy = false;
+      emit('done', { docs: Object.keys(sentNames).length, bytes: stats.bytes, from: 'desk' });
+      emit('state', state());
+      return;
+    }
     auditTimer = setTimeout(function () {
       auditTimer = null;
       if (!busy) return;
@@ -518,13 +622,13 @@
     }
     if (!doc.blob) {
       /* 元信息可能很长，必须走分片，否则 dc.send 抛错后这条记录会凭空消失 */
-      if (!sendLarge({ t: 'doc-meta-only', id: id, meta: stripBlob(doc) })) return '';
+      if (!(await sendLarge({ t: 'doc-meta-only', id: id, meta: stripBlob(doc) }))) return '';
       return doc.name;
     }
     const buf = await doc.blob.arrayBuffer();
     const total = Math.ceil(buf.byteLength / CHUNK);
     /* doc-begin 带整份正文与识别文本，是最容易超限的一条消息 */
-    if (!sendLarge({ t: 'doc-begin', id: id, size: buf.byteLength, total: total, meta: stripBlob(doc) })) {
+    if (!(await sendLarge({ t: 'doc-begin', id: id, size: buf.byteLength, total: total, meta: stripBlob(doc) }))) {
       emit('progress', { stage: '「' + doc.name + '」头部信息发送失败，将在对账后重试', current: 0, total: 0, bytes: stats.bytes });
       return '';
     }
@@ -630,7 +734,8 @@
     expectIds = [];
     auditSent = false;
     busy = true;
-    const sent = sendLarge({ t: 'plan', need: need, total: docs.length, metaOnly: metaOnlyOk });
+    lastPlan = { need: need };
+    const sent = await sendLarge({ t: 'plan', need: need, total: docs.length, metaOnly: metaOnlyOk });
     if (!sent) {
       busy = false;
       emit('error', { message: '差额清单回传失败，连接可能已断开，请重新配对' });
@@ -642,10 +747,13 @@
       current: 0, total: need.length, bytes: 0
     });
     emit('state', state());
+    /* 电脑端若是旧版本，不认识 plan，6 秒后按旧格式直接点单 */
+    startLegacyTimer();
   }
 
   /* 手机端：电脑端已选好，开始接收这一批 */
   function onGo(msg) {
+    stopLegacyTimer();
     const ids = Array.isArray(msg.ids) ? msg.ids.filter(function (x) { return x != null; }) : [];
     if (!ids.length) {
       /* 电脑端一份都没选，直接收尾 */
@@ -671,7 +779,7 @@
 
     const missing = expectIds.filter(function (id) { return !gotIds[id]; });
     const got = Object.keys(gotIds).length;
-    const sent = sendLarge({ t: 'audit', missing: missing, expect: expectIds.length, got: got });
+    const sent = await sendLarge({ t: 'audit', missing: missing, expect: expectIds.length, got: got });
     if (!sent) {
       busy = false;
       emit('error', { message: '对账结果回传失败，连接可能已断开' });
@@ -679,6 +787,17 @@
       return;
     }
     if (missing.length) {
+      if (peerProto !== PROTO) {
+        /* 旧版本电脑端不会补传，别让界面一直等 */
+        busy = false;
+        emit('progress', {
+          stage: '收到 ' + got + ' 份，还有 ' + missing.length + ' 份没到（电脑端是旧版本，无法自动补传）',
+          current: got, total: expectIds.length, bytes: stats.bytes
+        });
+        emit('done', { docs: got, bytes: stats.bytes, from: 'phone' });
+        emit('state', state());
+        return;
+      }
       emit('progress', {
         stage: '有 ' + missing.length + ' 份未写入，正在等电脑端补传',
         current: got, total: expectIds.length, bytes: stats.bytes

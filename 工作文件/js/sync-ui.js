@@ -484,11 +484,18 @@
         '<button class="btn block" data-sync-reset type="button">断开连接</button>';
     }
 
+    const legacy = st.peerProto && st.proto && st.peerProto !== st.proto;
     return '<div class="sync-panel">' +
       '<div class="sync-head">' + statusBadge() +
-      '<span class="sync-role-tag">' + (role === 'desk' ? '电脑端' : '手机端') + '</span>' +
+      '<span class="sync-role-tag">' + (role === 'desk' ? '电脑端' : '手机端') +
+      (window.APP_VERSION ? ' · v' + window.APP_VERSION : '') + '</span>' +
       '</div>' +
       main +
+      (legacy
+        ? '<div class="notice warn">对端页面还是旧版本（协议 ' + st.peerProto + '，本端 ' + st.proto + '），' +
+          '已自动切到兼容模式。传输能用，但对账与勾选功能不生效——' +
+          '把两端页面都刷新一次（手机端要把应用完全关掉再打开）就能用上新版。</div>'
+        : '') +
       ((phase === 'select' || phase === 'done') ? bulkHintHtml() : '') +
       '<div class="notice info" style="margin-top:6px">' +
       '数据只在两台设备之间直连传输，不经过任何服务器，也不需要登录。' +
@@ -753,6 +760,9 @@
         });
 
         window.Sync.on('progress', function (p) { paintProgress(p); });
+
+        /* 对端是旧版本：面板上直接说明，别让人干等 */
+        window.Sync.on('peer-old', function () { render(); });
 
         /* 电脑端：手机回报差额 → 弹出勾选面板 */
         window.Sync.on('plan', async function (p) {
