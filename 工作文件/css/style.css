@@ -2488,6 +2488,15 @@ mark.kw-hit.kw-hit-focus {
   margin: 12px 2px 12px; padding-top: 2px;
 }
 .qf-bar .qf-manage { margin-left: auto; }
+.qf-bar .qf-manage + .qf-manage { margin-left: 0; }
+/* 搜索结果行右侧的「屏蔽」：轻一点，别抢文件名的视觉重心 */
+.row-hide {
+  margin-left: 8px; padding: 2px 8px;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--card-2); color: var(--text-2);
+  font-size: 11px; line-height: 1.5; cursor: pointer;
+}
+.row-hide:hover { border-color: var(--primary); color: var(--primary-2); }
 /* 未选中的词签也给个底，让人看得出可以点 */
 .qf-word {
   background: var(--card-2);

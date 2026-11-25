@@ -584,8 +584,9 @@
       return la < lb ? 1 : -1;
     });
 
+    const shownGroups = weekExpanded ? groupKeys : groupKeys.slice(0, 5);
     const weekHtml = groupKeys.length
-      ? '<div class="rows">' + groupKeys.map(function (k) {
+      ? '<div class="rows">' + shownGroups.map(function (k) {
           const list = groups[k];
           const latest = list.reduce(function (m, d) { return d.archiveDate > m.archiveDate ? d : m; }, list[0]);
           if (k === '0' || k === 0) {
@@ -643,7 +644,13 @@
       (kw.html ? kw.html : '') +
       '<div class="section-title"><span>本周日程</span><span class="count">点日期看当天</span></div>' +
       calHtml +
-      '<div class="section-title"><span>近一周项目</span><span class="count">' + weekDocs.length + ' 份</span></div>' +
+      '<div class="section-title" id="weekAnchor"><span>近一周项目</span><span class="title-side">' +
+      '<span class="count">' + weekDocs.length + ' 份</span>' +
+      (groupKeys.length > 5
+        ? '<button class="section-link" data-week-toggle type="button">' +
+          (weekExpanded ? '收起' : '展开全部 ' + groupKeys.length + ' 个项目') + UI.icon('chev') + '</button>'
+        : '') +
+      '</span></div>' +
       weekHtml +
       '<div class="section-title"><span>最近添加的文件</span>' + sectionLink('archive') + '</div>' +
       recentHtml +
@@ -977,6 +984,27 @@
   /* ---------- 查询 ---------- */
 
   let searchResults = [];
+  let weekExpanded = false;
+
+  /* 暂时屏蔽：只影响搜索结果，不删文件。存在本机 localStorage，按源隔离。 */
+  const HIDDEN_KEY = 'dsearch.hiddenDocs';
+  function hiddenIds() {
+    try {
+      const v = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]');
+      return Array.isArray(v) ? v.map(Number).filter(function (n) { return n > 0; }) : [];
+    } catch (e) { return []; }
+  }
+  function saveHiddenIds(ids) {
+    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(ids)); } catch (e) { UI.toast('本机存储不可用，屏蔽只在本次打开有效', 'warn'); }
+  }
+  function toggleHidden(id) {
+    const ids = hiddenIds();
+    const i = ids.indexOf(Number(id));
+    if (i >= 0) ids.splice(i, 1);
+    else ids.push(Number(id));
+    saveHiddenIds(ids);
+    return i < 0;
+  }
 
   /* 结果摘录：转义后高亮关键词 */
   function markSnippet(snippet, q) {
@@ -1001,10 +1029,14 @@
 
   /* 按激活的筛选词收窄结果集，全部满足才保留 */
   function visibleResults() {
+    const hidden = hiddenIds();
+    const base = hidden.length
+      ? searchResults.filter(function (r) { return hidden.indexOf(Number(r.doc && r.doc.id)) < 0; })
+      : searchResults;
     const fs = activeFilters();
-    if (!fs.length) return searchResults;
+    if (!fs.length) return base;
     const words = fs.map(function (w) { return w.toLowerCase(); });
-    return searchResults.filter(function (r) {
+    return base.filter(function (r) {
       const hay = resultHaystack(r);
       for (let i = 0; i < words.length; i++) {
         if (hay.indexOf(words[i]) < 0) return false;
@@ -1025,6 +1057,9 @@
           '</button>';
       }).join('') +
       '<button class="btn sm ghost qf-manage" data-q-filter-manage type="button" title="管理自定义筛选词">＋ 筛选词</button>' +
+      (hiddenIds().length
+        ? '<button class="btn sm ghost qf-manage" data-q-hidden-manage type="button" title="查看并恢复被屏蔽的文件">已屏蔽 ' + hiddenIds().length + ' 份</button>'
+        : '') +
       '</div>';
   }
 
@@ -1034,9 +1069,13 @@
     const list = visibleResults();
     let countText = '自定义筛选词';
     if (q) {
+      const hidden = hiddenIds().filter(function (id) {
+        return searchResults.some(function (r) { return Number(r.doc && r.doc.id) === id; });
+      }).length;
       if (!searchResults.length) countText = '无匹配';
       else if (fs.length && list.length !== searchResults.length) countText = '筛选后 ' + list.length + ' 条 · 共 ' + searchResults.length + ' 条';
       else countText = list.length + ' 条 · 点击直达文件';
+      if (hidden) countText += ' · 已屏蔽 ' + hidden + ' 份';
     }
     const title = '<div class="section-title"><span>匹配结果</span><span class="count">' + countText + '</span></div>';
     if (!q) {
@@ -1058,7 +1097,9 @@
         : (r.hit === 'ocr' ? '<span class="badge ocr">图片文字</span>'
           : (r.hit === 'fields' ? '<span class="badge muted">字段</span>' : ''));
       return '<tr class="search-row" data-view-open="' + d.id + '" title="点击直接打开文件并定位到关键词">' +
-        '<td class="name cell-strong">' + esc(d.name) + hitLabel + '</td>' +
+        '<td class="name cell-strong">' + esc(d.name) + hitLabel +
+        '<button class="row-hide" data-hide-doc="' + d.id + '" type="button" title="暂时屏蔽：搜索时不再显示这份文件，文件本身保留">屏蔽</button>' +
+        '</td>' +
         '<td class="num">' + esc(d.fileDate || '—') + '</td>' +
         '<td>' + esc(sn || '—') + '</td>' +
         '<td class="name" style="max-width:260px">' + markSnippet(r.snippet || (r.hit === 'name' ? '文件名命中' : '—'), q) + '</td>' +
@@ -1119,6 +1160,44 @@
       q: q,
       seriesId: state.search.seriesId || null,
       ext: state.search.ext || null
+    });
+  }
+
+  /* 暂时屏蔽的文件：只影响搜索结果，随时恢复 */
+  function openHiddenDocs() {
+    function rowsHtml() {
+      const ids = hiddenIds();
+      if (!ids.length) return '<p class="kw-tip muted">还没有屏蔽任何文件。在搜索结果行右侧点「屏蔽」即可。</p>';
+      const nameOf = function (id) {
+        for (let i = 0; i < state.docs.length; i++) {
+          if (state.docs[i].id === id) return state.docs[i].name;
+        }
+        return '（这份文件已删除）';
+      };
+      return '<div class="qf-list">' + ids.map(function (id) {
+        return '<div class="qf-row"><span class="qf-tag" title="' + esc(nameOf(id)) + '">' + esc(nameOf(id)) + '</span>' +
+          '<button class="qf-sym" data-hidden-restore="' + id + '" type="button" title="恢复搜索显示">恢复</button></div>';
+      }).join('') + '</div>';
+    }
+
+    const html = '<div class="form">' +
+      '<div class="field"><label>已屏蔽的文件<span class="hint">只在搜索结果里隐藏，文件本身没有删除，也不会影响别人</span></label>' +
+      '<div id="hiddenList">' + rowsHtml() + '</div></div>' +
+      '<div class="form-actions"><button class="btn primary" data-hidden-close type="button">完成</button></div></div>';
+
+    UI.openDrawer('暂时屏蔽的文件', html, function (body) {
+      const list = body.querySelector('#hiddenList');
+      body.addEventListener('click', function (e) {
+        const restore = e.target.closest('[data-hidden-restore]');
+        if (restore) {
+          toggleHidden(parseInt(restore.getAttribute('data-hidden-restore'), 10));
+          if (list) list.innerHTML = rowsHtml();
+          refreshSearchResults();
+          UI.toast('已恢复显示', 'ok');
+          return;
+        }
+        if (e.target.closest('[data-hidden-close]')) UI.closeDrawer();
+      });
     });
   }
 
@@ -2824,6 +2903,15 @@
         return;
       }
 
+      const hideBtn = e.target.closest('[data-hide-doc]');
+      if (hideBtn) {
+        const id = parseInt(hideBtn.getAttribute('data-hide-doc'), 10);
+        if (toggleHidden(id)) UI.toast('已屏蔽，搜索结果里不再显示；文件还在，可在「已屏蔽」里恢复', 'ok');
+        else UI.toast('已恢复显示', 'ok');
+        refreshSearchResults();
+        return;
+      }
+
       const viewOpenBtn = e.target.closest('[data-view-open]');
       if (viewOpenBtn) {
         const id = parseInt(viewOpenBtn.getAttribute('data-view-open'), 10);
@@ -3066,6 +3154,19 @@
 
       if (e.target.closest('[data-todo-done]')) {
         await openTodoDone();
+        return;
+      }
+
+      if (e.target.closest('[data-week-toggle]')) {
+        weekExpanded = !weekExpanded;
+        await render('home');
+        const anchor = document.getElementById('weekAnchor');
+        if (anchor && anchor.scrollIntoView) anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+
+      if (e.target.closest('[data-q-hidden-manage]')) {
+        openHiddenDocs();
         return;
       }
 
