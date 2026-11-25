@@ -77,7 +77,11 @@
 
   function available() { return S.available; }
 
+  /* 中转只可能发生在局域网 http 上：本机服务没有 https。
+     纯静态部署（GitHub Pages）是 https，直接判定不可用——
+     省掉一次必然 404 的探测，入口也不会先闪一下再消失。 */
   function supported() {
+    if (location.protocol !== 'http:') return false;
     return !!(window.Sync && window.Sync.isSupported && window.Sync.isSupported() && window.fetch);
   }
 
@@ -324,7 +328,7 @@
 
   /* 地址里带 #relay=… 就是扫了电脑的网址：等界面就绪后自己把同步面板打开。
      放在这里而不是 app.js，是为了不依赖两者的加载顺序 */
-  probe();
+  if (supported()) probe();
 
   if (parseHash()) {
     let tries = 0;
