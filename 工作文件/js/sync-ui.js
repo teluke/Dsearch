@@ -18,9 +18,6 @@
   let pickRows = [];          // 电脑端：手机缺哪些（id / name / size）
   let picked = new Set();     // 电脑端：勾选中的 id
   let auditInfo = null;       // 对账结果
-  /* 走中转站进来就是「打开网址自动同步」，不再停下来等勾选；
-     要一份份挑的，走旧扫码通道 */
-  let relayAuto = false;
 
   /* ---------- 二维码 ---------- */
 
@@ -382,19 +379,6 @@
       done: ['同步完成', 'ok'],
       error: ['出现问题', 'err']
     };
-    const rel = relSt();
-    /* done 表示配对已交接，徽标要跟着传输阶段走，不能再显示「已连接」 */
-    if (rel.phase && rel.phase !== 'idle' && rel.phase !== 'done') {
-      const rmap = {
-        opening: ['正在连接', 'warn'],
-        wait: ['等平板扫码', 'warn'],
-        connecting: ['正在连接', 'warn'],
-        done: ['已连接', 'ok'],
-        error: ['出现问题', 'err']
-      };
-      const rv = rmap[rel.phase] || rmap.opening;
-      return '<span class="sync-badge ' + rv[1] + '">' + rv[0] + '</span>';
-    }
     const v = map[phase] || map.idle;
     return '<span class="sync-badge ' + v[1] + '">' + v[0] + '</span>';
   }
@@ -468,164 +452,8 @@
       '</details>';
   }
 
-  /* ---------- 中转站（v2.11） ----------
-     配对只给一个网址，平板打开即连；内容端到端加密，服务端只转密文。 */
-
-  function relSt() {
-    return (window.Relay && window.Relay.state()) || { phase: 'idle' };
-  }
-
-  function relayPanelHtml() {
-    const r = relSt();
-    if (r.phase === 'wait' || r.phase === 'opening') {
-      return '<div class="notice info">让平板扫下面的二维码，或者把网址发给它。' +
-        '配对信息会自动交换，不用来回粘文字。</div>' +
-        qrMarkup(r.url || '') +
-        '<div class="relay-code"><span class="rc-label">配对码</span><strong>' + UI.esc(r.code || '') + '</strong></div>' +
-        '<p class="inline-hint">相机扫不出就手输网址：<b>' + UI.esc(r.url || '') + '</b></p>' +
-        (window.Relay && window.Relay.base()
-          ? '<p class="inline-hint">平板首次打开这个 https 网址会提示证书不受信任，点「高级 → 继续前往」' +
-            '即可，之后不会再问。文件仍走 WebRTC 加密直连。</p>'
-          : '') +
-        '<button class="btn block" data-relay-copy type="button">复制网址</button>' +
-        '<p class="inline-hint" style="text-align:center">网址只在这台电脑开着中转时有效，关掉即失效。</p>' +
-        '<button class="btn block" data-sync-reset type="button">关闭中转</button>';
-    }
-    if (r.phase === 'connecting') {
-      return '<div class="notice info">' + UI.esc(r.message || '正在建立直连…') + '</div>' +
-        '<div class="sync-progress"><div class="sp-head"><span>交换配对信息</span><span class="sp-num"></span></div>' +
-        '<div class="sp-bar"><i style="width:60%"></i></div></div>' +
-        '<p class="inline-hint" style="text-align:center">连上之后自动开始同步，不需要再点任何东西。</p>' +
-        '<button class="btn block" data-sync-reset type="button">取消</button>';
-    }
-    if (r.phase === 'error') {
-      return '<div class="notice warn">' + UI.esc(r.lastError || '中转出错') + '</div>' +
-        '<button class="btn primary block" data-relay-desk type="button">重新开启中转</button>';
-    }
-    return '';
-  }
-
-  /* 内网 http（不是 localhost）就是非安全上下文：没有相机、没有离线缓存、独立一份库 */
-  function isLanHttp() {
-    if (location.protocol !== 'http:') return false;
-    const h = location.hostname;
-    return !(h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]');
-  }
-
-  function noCam() {
-    return !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-  }
-
-  /* 平板扫不了码时的第二条入口：电脑面板能「复制网址」，粘过来一样能连 */
-  function relayPasteHtml() {
-    return '<details class="sync-manual"' + (noCam() ? ' open' : '') + '>' +
-      '<summary>扫不了码？把电脑上的网址粘进来</summary>' +
-      '<p class="inline-hint">在电脑的同步面板点「复制网址」，发到平板（微信发给自己、或粘到输入法剪贴板），' +
-      '再粘到下面。粘完自动连，不用相机、也不用扫码。</p>' +
-      '<div class="lan-jump">' +
-      '<input type="text" data-relay-paste-input placeholder="http://192.168.1.5:5173/index.html#relay=…" autocomplete="off">' +
-      '<button class="btn primary" type="button" data-relay-paste-go>连接</button>' +
-      '</div>' +
-      '</details>';
-  }
-
-  function lanNoticeHtml() {
-    if (!isLanHttp()) return '';
-    return '<details class="sync-manual">' +
-      '<summary>这个地址和线上版本有什么不一样</summary>' +
-      '<p class="inline-hint">当前地址是 <b>' + UI.esc(location.host) + '</b>（局域网 http），浏览器对这类地址有三条限制：' +
-      '① 网页里调不了相机，扫码要用平板自带的相机扫电脑屏幕；' +
-      '② 没有离线缓存，电脑关掉就开不了；' +
-      '③ 文件存在这个网址名下，和线上版本是两份互不相通的库——' +
-      '换回线上地址看到的是线上那份，别以为文件丢了。</p>' +
-      '</details>';
-  }
-
-  function relayEntryHtml() {
-    const cam = !noCam();
-    return '<div class="sync-role">' +
-      '<button class="btn primary block" data-relay-desk type="button">这台是电脑，开启中转</button>' +
-      '<p class="inline-hint" style="text-align:center">电脑上运行着本机服务时用这条：平板打开网址就自动连、自动同步</p>' +
-      (cam
-        ? '<button class="btn block" data-relay-phone type="button">这台是平板，扫码连接电脑</button>' +
-          '<p class="inline-hint" style="text-align:center">扫电脑屏幕上的网址二维码</p>'
-        : '<p class="inline-hint" style="text-align:center">这台设备现在调不了网页相机：' +
-          '平板请用<b>自带的相机</b>扫电脑屏幕上的二维码，扫到网址点开就自动连；' +
-          '或者把电脑上的网址粘进来。</p>') +
-      '</div>' +
-      relayPasteHtml() +
-      '<details class="sync-manual">' +
-      '<summary>这条通道安全吗</summary>' +
-      '<p class="inline-hint">连接只在本机局域网内，公网地址一律被拒绝。' +
-      '中转服务只转发两段配对信息，不接触文件内容、不写磁盘，闲置十分钟自动销毁；' +
-      '文件走 WebRTC 数据通道，由 DTLS 端到端加密，与直接扫码传输的强度相同。' +
-      '如果担心同网段有人做中间人，仍可用下面「生成配对码 → 扫码」的离线交换方式。</p>' +
-      '</details>';
-  }
-
-  /* 线上 https 页面：填一次电脑的 https 地址，就能继续用这个网址自动配对。
-     不用换 origin、不用换库。老 http 跳转保留在折叠里，给没有 https 服务的场合用。 */
-  function lanJumpHtml() {
-    if (location.protocol !== 'https:' || isLanHttp()) return '';
-    const base = window.Relay && window.Relay.base ? window.Relay.base() : '';
-    const avail = window.Relay ? window.Relay.available() : null;
-    return '<details class="sync-manual"' + (base ? '' : ' open') + '>' +
-      '<summary>继续用这个网址自动同步（推荐）</summary>' +
-      '<p class="inline-hint">电脑运行 <code>启动服务-https.bat</code>，把打印出来的 https 地址填一次。' +
-      '平板第一次打开这个 https 地址时，浏览器会提示证书不受信任，点「高级 → 继续前往」一次。' +
-      '之后平板扫电脑屏幕上的二维码就自动连，文件仍存在当前这个网址下，不用换地址。</p>' +
-      '<div class="lan-jump">' +
-      '<input type="text" data-relay-base-input placeholder="https://192.168.1.5:5173" autocomplete="off" value="' + UI.esc(base) + '">' +
-      '<button class="btn primary" type="button" data-relay-base-save>' + (base ? '重新检测' : '保存并检测') + '</button>' +
-      '</div>' +
-      (base
-        ? '<p class="inline-hint">已填：<b>' + UI.esc(base) + '</b>' +
-          (avail === false ? ' · 连不上服务，确认电脑已启动 https 服务，并允许本网站访问局域网' : '') +
-          '</p>' +
-          (avail === false
-            ? '<a class="btn block" href="' + UI.esc(base) + '" target="_blank" rel="noopener">' +
-              '先打开电脑地址（处理证书提示）</a>' +
-              '<p class="inline-hint">在新标签页里点「高级 → 继续前往」，回来再点下面这个按钮。</p>' +
-              '<button class="btn block" type="button" data-relay-lna>允许访问局域网并重试</button>'
-            : '') +
-          '<button class="btn block" type="button" data-relay-base-clear>清除这个地址</button>'
-        : '') +
-      '</details>' +
-      '<details class="sync-manual">' +
-      '<summary>老办法：跳到电脑的局域网 http 地址</summary>' +
-      '<p class="inline-hint">那条路不用证书，但会换一份空库，得从电脑重新同步一次；' +
-      '而且 http 地址下网页调不了相机、也没有离线缓存。</p>' +
-      '<div class="lan-jump">' +
-      '<input type="text" inputmode="decimal" data-lan-input placeholder="例如 192.168.1.5:5173" autocomplete="off">' +
-      '<button class="btn primary" type="button" data-lan-go>打开</button>' +
-      '</div>' +
-      '</details>';
-  }
-
-  /* 只允许跳私网地址，避免被塞进一个奇怪的网址 */
-  function parseLanAddr(text) {
-    let t = String(text || '').trim().replace(/\s+/g, '');
-    t = t.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-    if (!t) return '';
-    if (t.indexOf(':') < 0) t += ':5173';
-    const m = /^([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d{1,5})$/.exec(t);
-    if (!m) return '';
-    const ip = m[1];
-    const ok = /^10\./.test(ip) || /^192\.168\./.test(ip) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || /^127\./.test(ip);
-    if (!ok) return '';
-    const port = parseInt(m[2], 10);
-    if (!(port > 0 && port < 65536)) return '';
-    return ip + ':' + port;
-  }
-
   function legacyEntryHtml() {
-    /* 中转要本机服务在跑；没有服务、或在纯静态部署上打开时，
-       下面这组按钮就是唯一能用的路，所以不折叠 */
-    const relayOk = !!(window.Relay && window.Relay.supported() && window.Relay.available() !== false);
-    return '<p class="inline-hint" style="text-align:center;margin:10px 0 6px">' +
-      (relayOk ? '或者：扫码配对（不依赖本机服务）' : '扫码配对') + '</p>' +
-      '<div class="sync-role">' +
+    return '<div class="sync-role">' +
       '<button class="btn block" data-sync-desk type="button">这台是电脑，生成配对码</button>' +
       '<button class="btn block" data-sync-phone type="button">这台是手机，扫描电脑二维码</button>' +
       '</div>';
@@ -633,27 +461,15 @@
 
   function panelHtml() {
     const st = window.Sync ? window.Sync.state() : { connected: false };
-    const rel = relSt();
     let main = '';
-
-    /* 中转站只负责配对：连上（done）之后交回原流程，勾选与进度都复用 */
-    if (rel.phase && rel.phase !== 'idle' && rel.phase !== 'done') {
-      return '<div class="sync-panel">' +
-        '<div class="sync-head">' + statusBadge() +
-        '<span class="sync-role-tag">' + (rel.role === 'desk' ? '电脑端' : '平板端') +
-        (window.APP_VERSION ? ' · v' + window.APP_VERSION : '') + '</span>' +
-        '</div>' + relayPanelHtml() + '</div>';
-    }
 
     if (!window.Sync || !window.Sync.isSupported()) {
       main = '<div class="notice warn">当前浏览器不支持局域网直连（WebRTC），请用 Chrome、Edge 或 Safari 打开。</div>';
     } else if (phase === 'idle' || phase === 'error') {
       main =
         (lastError ? '<div class="notice warn">' + UI.esc(lastError) + '</div>' : '') +
-        (window.Relay && window.Relay.supported() && window.Relay.available() !== false ? relayEntryHtml() : '') +
-        lanJumpHtml() +
-        lanNoticeHtml() +
-        legacyEntryHtml();
+        legacyEntryHtml() +
+        bulkHintHtml();
     } else if (phase === 'offer') {
       main =
         '<div class="notice info">让手机/平板扫下面的二维码（同一 WiFi 下）。扫完那台设备会给你一段<strong>返回码</strong>，' +
@@ -678,10 +494,6 @@
         '</details>' +
         '<p class="inline-hint" style="text-align:center">电脑端如果停在「等待读取」，就是返回码没送到，' +
         '回去用「复制返回码」发文字。</p>' +
-        (window.Relay && window.Relay.supported()
-          ? '<p class="inline-hint" style="text-align:center">总是卡在这一步？取消后改用中转：' +
-            '电脑上点「开启中转」，这里扫它的网址，连上就自动同步。</p>'
-          : '') +
         '<button class="btn block" data-sync-reset type="button">取消</button>';
     } else if (phase === 'select') {
       main = pickPanelHtml();
@@ -763,118 +575,10 @@
     }
   }
 
-  /* ---------- 中转站入口 ---------- */
-
-  async function startRelayDesk() {
-    role = 'desk';
-    relayAuto = true;
-    lastError = '';
-    try {
-      await window.Relay.open();
-      render();
-    } catch (e) {
-      lastError = (e && e.message) || '开启中转失败';
-      setPhase('error');
-    }
-  }
-
-  async function joinRelay(sid, code) {
-    role = 'phone';
-    relayAuto = true;
-    lastError = '';
-    try {
-      await window.Relay.join(sid, code);
-      render();
-    } catch (e) {
-      lastError = (e && e.message) || '连接中转失败';
-      setPhase('error');
-    }
-  }
-
-  function startRelayPhone() {
-    scanCode(function (text) {
-      const m = /relay=([0-9a-f]{6,32})\.(\d{6})/.exec(String(text || ''));
-      if (!m) { UI.toast('这不是中转网址二维码', 'err'); return; }
-      joinRelay(m[1], m[2]);
-    }, { autoCamera: true });
-  }
-
   function bind() {
     if (!bodyEl) return;
     const b = bodyEl;
 
-    const lanGo = b.querySelector('[data-lan-go]');
-    if (lanGo) {
-      lanGo.onclick = function () {
-        const inp = b.querySelector('[data-lan-input]');
-        const addr = parseLanAddr(inp ? inp.value : '');
-        if (!addr) { UI.toast('填电脑的局域网地址，例如 192.168.1.5:5173', 'err'); return; }
-        location.href = 'http://' + addr + '/';
-      };
-    }
-
-    const baseSave = b.querySelector('[data-relay-base-save]');
-    if (baseSave) {
-      baseSave.onclick = async function () {
-        const inp = b.querySelector('[data-relay-base-input]');
-        try {
-          await window.Relay.setBase(inp ? inp.value : '');
-          render();
-          const ok = window.Relay.available() !== false;
-          UI.toast(ok ? '已连上电脑服务，中转入口已出现' : '地址已保存，电脑上的 https 服务还没连通',
-            ok ? 'ok' : 'warn');
-        } catch (e) {
-          UI.toast((e && e.message) || '地址格式不对', 'err');
-        }
-      };
-    }
-    const baseClear = b.querySelector('[data-relay-base-clear]');
-    if (baseClear) {
-      baseClear.onclick = function () {
-        window.Relay.clearBase();
-        render();
-      };
-    }
-    const lnaBtn = b.querySelector('[data-relay-lna]');
-    if (lnaBtn) {
-      lnaBtn.onclick = async function () {
-        try {
-          await window.Relay.ensureAccess();
-          render();
-          const ok = window.Relay.available() !== false;
-          UI.toast(ok ? '已允许，中转入口已出现' : '还是连不上，检查电脑上的 https 服务',
-            ok ? 'ok' : 'warn');
-        } catch (e) {
-          UI.toast((e && e.message) || '访问被浏览器拦下', 'err');
-        }
-      };
-    }
-
-    const relDesk = b.querySelector('[data-relay-desk]');
-    if (relDesk) relDesk.onclick = startRelayDesk;
-    const relPhone = b.querySelector('[data-relay-phone]');
-    if (relPhone) relPhone.onclick = startRelayPhone;
-
-    /* 平板粘网址：同址直接连，异址跳过去（跳过去那边页面自己会 join） */
-    const pasteGo = b.querySelector('[data-relay-paste-go]');
-    if (pasteGo) {
-      pasteGo.onclick = function () {
-        const inp = b.querySelector('[data-relay-paste-input]');
-        const raw = String((inp && inp.value) || '').replace(/\s+/g, '');
-        if (!raw) { UI.toast('先粘贴电脑上「复制网址」得到的那个网址', 'err'); return; }
-        const m = /relay=([0-9a-f]{6,32})\.(\d{6})/.exec(raw);
-        if (!m) { UI.toast('这段里没有配对信息，要粘带 #relay=… 的完整网址', 'err'); return; }
-        let sameHost = true;
-        try {
-          const u = new URL(raw, location.href);
-          sameHost = u.host === location.host;
-        } catch (e) { /* 只有 #relay=… 的片段，按本页处理 */ }
-        if (!sameHost) { location.href = raw; return; }
-        joinRelay(m[1], m[2]);
-      };
-    }
-    const relCopy = b.querySelector('[data-relay-copy]');
-    if (relCopy) relCopy.onclick = function () { copyCode(relSt().url, '网址'); };
     const deskBtn = b.querySelector('[data-sync-desk]');
     if (deskBtn) deskBtn.onclick = startDesk;
     const phoneBtn = b.querySelector('[data-sync-phone]');
@@ -882,9 +586,6 @@
     const resetBtn = b.querySelector('[data-sync-reset]');
     if (resetBtn) {
       resetBtn.onclick = function () {
-        if (window.Relay && window.Relay.state().phase !== 'idle') {
-          window.Relay.disconnect().catch(function () { /* 忽略 */ });
-        }
         window.Sync.disconnect();
         autoStarted = false;
         offerSdp = '';
@@ -895,7 +596,6 @@
         pickRows = [];
         picked = new Set();
         auditInfo = null;
-        relayAuto = false;
         setPhase('idle');
       };
     }
@@ -1041,7 +741,6 @@
   function openPanel(opts) {
     opts = opts || {};
     const st = window.Sync ? window.Sync.state() : { connected: false };
-    const deep = window.Relay ? window.Relay.parseHash() : null;
     /* 已连接时重开面板直接显示连接态；select / done 这类「有未完成操作」的阶段要保留，
        否则关一下面板再打开，勾选列表就没了 */
     if (!st.connected) phase = 'idle';
@@ -1052,7 +751,7 @@
     progressText = st.connected ? (progressText || '已连接') : '';
     syncedCount = st.connected ? syncedCount : 0;
     lastError = '';
-    role = deep ? 'phone' : (st.role || 'desk');
+    role = st.role || 'desk';
 
     UI.openDrawer('局域网同步', panelHtml(), function (body) {
       bodyEl = body;
@@ -1060,24 +759,6 @@
       /* 从折叠菜单「扫码连接电脑」进来：手机端直接开始扫码 */
       if (opts.scan && window.Sync && window.Sync.isSupported() && !st.connected) {
         setTimeout(function () { startPhone(); }, 320);
-      }
-      /* 扫网址进来（地址里带 #relay=…）：自动连上，不用再点按钮 */
-      if (deep && window.Relay && window.Relay.supported()) {
-        setTimeout(function () { joinRelay(deep.sid, deep.code); }, 320);
-      }
-      if (window.Relay && !window.Relay.__bound) {
-        window.Relay.__bound = true;
-        window.Relay.on('state', function () {
-          if (!bodyEl) return;
-          render();
-        });
-        window.Relay.on('progress', function () {
-          if (!bodyEl) return;
-          render();
-        });
-        window.Relay.on('error', function (e) {
-          if (e && e.message) UI.toast(e.message, 'err');
-        });
       }
       if (window.Sync && !window.Sync.__bound) {
         window.Sync.__bound = true;
@@ -1132,19 +813,6 @@
           rows.sort(function (a, b) { return String(a.name).localeCompare(String(b.name), 'zh'); });
           /* 差额为空时电脑端会自动收尾，这一轮可能已经结束了，别再插一脚 */
           if (!window.Sync.state().busy) return;
-          if (relayAuto && role === 'desk') {
-            pickRows = rows;
-            picked = new Set(rows.map(function (r) { return r.id; }));
-            auditInfo = null;
-            percent = 0;
-            syncedCount = 0;
-            setPhase('syncing', '自动发送 ' + rows.length + ' 份');
-            window.Sync.sendSelected(rows.map(function (r) { return r.id; })).catch(function (e) {
-              lastError = (e && e.message) || '发送失败';
-              setPhase('error');
-            });
-            return;
-          }
           pickRows = rows;
           picked = new Set(rows.map(function (r) { return r.id; }));
           auditInfo = null;

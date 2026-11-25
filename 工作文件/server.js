@@ -8,20 +8,12 @@
 'use strict';
 
 const http = require('http');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = __dirname;
 const PORT = process.env.PORT || 5173;
-/* --https：本机自签证书。线上 https 页面只能请求 https 的内网服务，
-   http 会被浏览器按混合内容拦掉（实测 ERR / Failed to fetch）。 */
-const USE_HTTPS = process.argv.indexOf('--https') >= 0 || process.env.DSEARCH_HTTPS === '1';
-/* 允许哪些线上源跨站调用本机中转；缺省放 GitHub Pages，其他源用环境变量追加 */
-const RELAY_ORIGINS = (process.env.DSEARCH_RELAY_ORIGINS || '')
-  .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -123,27 +115,6 @@ function hostAllowed(hostHeader) {
   return false;
 }
 
-/* 线上 https 页面（GitHub Pages）要跨站访问本机中转；
-   同站请求不需要 CORS，别的源一律不给放行。 */
-function originAllowed(origin, hostHeader) {
-  if (!origin) return false;
-  if (origin === 'http://' + hostHeader || origin === 'https://' + hostHeader) return true;
-  if (/^https:\/\/[a-z0-9-]+\.github\.io$/i.test(origin)) return true;
-  return RELAY_ORIGINS.indexOf(origin) >= 0;
-}
-
-function corsHeaders(origin, hostHeader) {
-  if (!originAllowed(origin, hostHeader)) return {};
-  return {
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Headers': 'Content-Type, X-Relay-Token',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Private-Network': 'true',
-    'Access-Control-Max-Age': '600',
-    'Vary': 'Origin'
-  };
-}
-
 function jsonOut(res, code, obj, extraHeaders) {
   const body = Buffer.from(JSON.stringify(obj));
   const headers = Object.assign({
@@ -221,26 +192,14 @@ async function handleRelay(req, res, u) {
     jsonOut(res, 403, { error: '拒绝非局域网地址访问' });
     return;
   }
-  const origin = String(req.headers.origin || '');
-  /* 每个响应单独挂 CORS 头，避免并发请求互相覆盖 */
-  const rawWriteHead = res.writeHead.bind(res);
-  const extra = corsHeaders(origin, req.headers.host);
-  res.writeHead = function (code, headers) {
-    return rawWriteHead(code, Object.assign({}, extra, headers || {}));
-  };
-  if (origin && !originAllowed(origin, req.headers.host)) {
+  const origin = req.headers.origin;
+  if (origin && origin !== ('http://' + req.headers.host)) {
     jsonOut(res, 403, { error: '拒绝跨站请求' });
     return;
   }
   const site = req.headers['sec-fetch-site'];
-  if (site && site !== 'same-origin' && site !== 'none' &&
-      !(site === 'cross-site' && originAllowed(origin, req.headers.host))) {
+  if (site && site !== 'same-origin' && site !== 'none') {
     jsonOut(res, 403, { error: '拒绝跨站请求' });
-    return;
-  }
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
     return;
   }
 
@@ -464,13 +423,7 @@ const requestHandler = function (req, res) {
   streamFile(filePath, res);
 };
 
-let server;
-if (USE_HTTPS) {
-  const pair = require('./makecert').ensure();
-  server = https.createServer({ key: pair.key, cert: pair.cert }, requestHandler);
-} else {
-  server = http.createServer(requestHandler);
-}
+const server = http.createServer(requestHandler);
 
 function streamFile(filePath, res) {
   const ext = path.extname(filePath).toLowerCase();
@@ -491,23 +444,16 @@ function streamFile(filePath, res) {
 }
 
 server.listen(PORT, '0.0.0.0', function () {
-  const scheme = USE_HTTPS ? 'https' : 'http';
-  console.log('工作文件静态服务已启动，端口 ' + PORT + (USE_HTTPS ? '（https，自签证书）' : ''));
-  /* 顺手把本机内网地址打出来，手机/平板手输网址时直接用 */
+  console.log('工作文件静态服务已启动，端口 ' + PORT);
   try {
     const nets = require('os').networkInterfaces();
     Object.keys(nets).forEach(function (name) {
       (nets[name] || []).forEach(function (n) {
         if (n.family === 'IPv4' && !n.internal) {
-          console.log('  局域网访问：' + scheme + '://' + n.address + ':' + PORT + '/');
+          console.log('  局域网访问：http://' + n.address + ':' + PORT + '/');
         }
       });
     });
   } catch (e) { /* 取不到就算了 */ }
-  if (USE_HTTPS) {
-    console.log('  首次在平板打开上面的 https 地址，浏览器会提示证书不受信任：');
-    console.log('  选「高级 → 继续前往」一次。之后线上页面就能自动连本机了。');
-    console.log('  证书在 .local-cert/，换 WiFi 或 IP 变动会自动重签。');
-  }
   console.log('中转站接口：/api/relay/*（仅内网可用，零知识，只存密文）');
 });
