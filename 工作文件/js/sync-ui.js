@@ -512,6 +512,44 @@
       '</details>';
   }
 
+  /* 线上版本（https）用不了中转：本机服务只有 http。
+     很多人平板装的是线上那个图标，一进面板只有扫码，就以为中转没做出来。
+     这里给一条明路：填电脑地址直接跳过去，跳过去中转入口就出现了。 */
+  function lanJumpHtml() {
+    const https = location.protocol !== 'http:';
+    if (!https) return '';
+    return '<details class="sync-manual">' +
+      '<summary>想用中转同步？先切到电脑的局域网地址</summary>' +
+      '<p class="inline-hint">当前打开的是线上版本（https），它连不到你电脑上的本机服务，' +
+      '所以只能扫码配对。中转要在局域网地址上用：先在电脑上运行 <code>工作文件/server.js</code>，' +
+      '再把下面这个地址填进去跳转（平板和电脑要连同一个 WiFi）。</p>' +
+      '<div class="lan-jump">' +
+      '<input type="text" inputmode="decimal" data-lan-input placeholder="例如 192.168.1.5:5173" autocomplete="off">' +
+      '<button class="btn primary" type="button" data-lan-go>打开</button>' +
+      '</div>' +
+      '<p class="inline-hint">地址在电脑启动服务时会打印出来（形如 192.168.x.x:5173）。' +
+      '注意：换地址等于换了一份本地数据，切过去后这份数据是空的，会从电脑完整同步一次；' +
+      '原来线上地址里的数据不会动。</p>' +
+      '</details>';
+  }
+
+  /* 只允许跳私网地址，避免被塞进一个奇怪的网址 */
+  function parseLanAddr(text) {
+    let t = String(text || '').trim().replace(/\s+/g, '');
+    t = t.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    if (!t) return '';
+    if (t.indexOf(':') < 0) t += ':5173';
+    const m = /^([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d{1,5})$/.exec(t);
+    if (!m) return '';
+    const ip = m[1];
+    const ok = /^10\./.test(ip) || /^192\.168\./.test(ip) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || /^127\./.test(ip);
+    if (!ok) return '';
+    const port = parseInt(m[2], 10);
+    if (!(port > 0 && port < 65536)) return '';
+    return ip + ':' + port;
+  }
+
   function legacyEntryHtml() {
     /* 中转要本机服务在跑；没有服务、或在纯静态部署上打开时，
        下面这组按钮就是唯一能用的路，所以不折叠 */
@@ -544,6 +582,7 @@
       main =
         (lastError ? '<div class="notice warn">' + UI.esc(lastError) + '</div>' : '') +
         (window.Relay && window.Relay.supported() && window.Relay.available() !== false ? relayEntryHtml() : '') +
+        lanJumpHtml() +
         legacyEntryHtml();
     } else if (phase === 'offer') {
       main =
@@ -569,6 +608,10 @@
         '</details>' +
         '<p class="inline-hint" style="text-align:center">电脑端如果停在「等待读取」，就是返回码没送到，' +
         '回去用「复制返回码」发文字。</p>' +
+        (window.Relay && window.Relay.supported()
+          ? '<p class="inline-hint" style="text-align:center">总是卡在这一步？取消后改用中转：' +
+            '电脑上点「开启中转」，这里扫它的网址，连上就自动同步。</p>'
+          : '') +
         '<button class="btn block" data-sync-reset type="button">取消</button>';
     } else if (phase === 'select') {
       main = pickPanelHtml();
@@ -689,6 +732,16 @@
   function bind() {
     if (!bodyEl) return;
     const b = bodyEl;
+
+    const lanGo = b.querySelector('[data-lan-go]');
+    if (lanGo) {
+      lanGo.onclick = function () {
+        const inp = b.querySelector('[data-lan-input]');
+        const addr = parseLanAddr(inp ? inp.value : '');
+        if (!addr) { UI.toast('填电脑的局域网地址，例如 192.168.1.5:5173', 'err'); return; }
+        location.href = 'http://' + addr + '/';
+      };
+    }
 
     const relDesk = b.querySelector('[data-relay-desk]');
     if (relDesk) relDesk.onclick = startRelayDesk;

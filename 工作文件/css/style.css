@@ -1616,6 +1616,31 @@ input.pick-hidden {
   padding: 2px 2px 0;
 }
 
+/* 中转站：手动跳转到局域网地址 */
+.lan-jump {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0 4px;
+}
+.lan-jump input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.lan-jump .btn {
+  flex: none;
+  height: 36px;
+  padding: 0 16px;
+}
+
 /* 中转站：配对码与安全码 */
 .relay-code,
 .relay-sas {
