@@ -3172,3 +3172,30 @@ html, body {
 .ev-side { gap: 5px; }
 .ev-side .ev-edit { height: 26px; padding: 0 9px; font-size: 11.5px; margin-top: 3px; }
 .ev-side .ev-edit svg { width: 12px; height: 12px; }
+
+/* v2.19.0 课表：关键词命中行按表头分类展示 */
+.sc-fields { display: flex; flex-wrap: wrap; gap: 4px 7px; margin-top: 5px; }
+.sc-field {
+  display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%;
+  font-size: 11.5px; line-height: 1.5; color: var(--text-2);
+  padding: 2px 8px; border-radius: 8px; background: rgba(108,139,245,.07);
+}
+.sc-field em {
+  font-style: normal; flex: none; font-weight: 500; color: var(--primary-2);
+  white-space: nowrap;
+}
+.sc-field em::after { content: '：'; }
+.sc-field > span { min-width: 0; }
+.rp-classify {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  padding: 0 0 10px; margin-bottom: 8px; border-bottom: 1px solid var(--line);
+}
+.rp-cls-title { font-size: 11.5px; font-weight: 600; color: var(--text-3); margin-right: 3px; }
+.rp-classify em {
+  font-style: normal; font-size: 11.5px; color: var(--primary-2);
+  padding: 3px 9px; border-radius: 999px; background: rgba(108,139,245,.09);
+}
+@media (max-width: 480px) {
+  .sc-fields { gap: 3px 5px; }
+  .sc-field { font-size: 11px; padding: 2px 6px; }
+}

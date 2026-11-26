@@ -1095,20 +1095,80 @@
       if (cells.length < 2) continue;
       const row = cells.join(' ');
       if (weekRe.test(row) || periodRe.test(row)) continue;
-      const teacher = headerColumn(cells, ['授课教师', '任课教师', '教师', '老师']);
-      if (teacher < 0) continue;
       const map = {
         row: i,
-        teacher: teacher,
+        teacher: headerColumn(cells, ['授课教师', '任课教师', '教师', '老师']),
         name: headerColumn(cells, ['课程名称', '课程', '课名', '科目']),
         room: headerColumn(cells, ['上课地点', '教室', '地点', '教学楼']),
         className: headerColumn(cells, ['上课班级', '班级', '教学班']),
         period: headerColumn(cells, ['节次', '课时'])
       };
-      if (map.name < 0 && map.room < 0 && map.className < 0 && map.period < 0) continue;
+      let known = 0;
+      ['teacher', 'name', 'room', 'className', 'period'].forEach(function (k) {
+        if (map[k] >= 0) known++;
+      });
+      if (known < 2) continue;
       return map;
     }
     return null;
+  }
+
+  /* 一行表格 + 同一张表的纵向表头 → 带分类标签的字段列表。
+     标签直接取表头文字；用户手选的字段关键词覆盖其对应列的值。 */
+  const SCHEDULE_LABELS = {
+    period: '节次', name: '课程名称', room: '上课地点', className: '上课班级', teacher: '授课教师'
+  };
+  function headerKeyOf(label) {
+    const t = String(label || '').replace(/\s/g, '');
+    if (!t) return '';
+    if (/节次|课时/.test(t)) return 'period';
+    if (isNameHeader(t)) return 'name';
+    if (/上课地点|教室|地点|教学楼|实训室|实验室/.test(t)) return 'room';
+    if (/上课班级|班级|教学班/.test(t)) return 'className';
+    if (/授课教师|任课教师|教师|老师/.test(t)) return 'teacher';
+    return '';
+  }
+  function isNameHeader(t) {
+    return /课程名称|课程名|课名|科目/.test(t) || t === '课程';
+  }
+  function cleanDisplayCell(v) {
+    return String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  }
+  function classifiedRowFields(rawCells, headCells, picked) {
+    const out = [];
+    if (!headCells || !headCells.length) {
+      SCHEDULE_FIELDS.forEach(function (f) {
+        const v = cleanDisplayCell(picked && picked[f.key]);
+        if (v) out.push({ label: SCHEDULE_LABELS[f.key], value: v, key: f.key });
+      });
+      return out;
+    }
+    for (let i = 0; i < headCells.length; i++) {
+      let label = cleanDisplayCell(headCells[i]);
+      let value = cleanDisplayCell(rawCells[i]);
+      if (isSchedulePrivateToken(label)) label = '';
+      if (isSchedulePrivateToken(value)) value = '';
+      const key = headerKeyOf(label);
+      if (key && picked && picked[key]) value = picked[key];
+      if (!value) continue;
+      if (!label) label = (key && SCHEDULE_LABELS[key]) || ('第' + (i + 1) + '列');
+      out.push({ label: label, value: value, key: key });
+    }
+    SCHEDULE_FIELDS.forEach(function (f) {
+      const v = cleanDisplayCell(picked && picked[f.key]);
+      if (!v) return;
+      if (!out.some(function (x) { return x.key === f.key; })) {
+        out.push({ label: SCHEDULE_LABELS[f.key], value: v, key: f.key });
+      }
+    });
+    return out;
+  }
+  function fallbackFields(c) {
+    return SCHEDULE_FIELDS.map(function (f) {
+      return { label: SCHEDULE_LABELS[f.key], value: cleanDisplayCell(c[f.key]), key: f.key };
+    }).filter(function (f) {
+      return f.value && f.value !== '—' && f.value !== '未标注教室' && f.value !== '未命名课程';
+    });
   }
 
   /* 编辑抽屉五个下拉的选项：表头列名 + 现有关键词 + 常用叫法，隐私值不进下拉 */
@@ -1214,7 +1274,15 @@
         const pm = s.match(periodRe);
         const cm = pm ? null : s.match(compactPeriodRe);
         const period = formatPeriods(pm ? pm[1] : (cm ? cm[1] : picked.period));
-        const hit = period || picked.name || picked.room || picked.className || picked.teacher ||
+        /* 关键词既可以是行内词，也可以是表头列名：选中列名时该列有值即算命中 */
+        const kwColumnHit = headCells ? kws.some(function (k) {
+          if (!k) return false;
+          const col = columnByChoice(headCells, k);
+          if (col < 0) return false;
+          const v = cleanCell(rawCells[col]);
+          return !!(v && !isSchedulePrivateToken(v));
+        }) : false;
+        const hit = period || picked.name || picked.room || picked.className || picked.teacher || kwColumnHit ||
           kws.some(function (k) { return k && s.indexOf(k) >= 0; });
         if (!hit) return;
 
@@ -1282,12 +1350,14 @@
           });
         }
         if (!name && !room && !className) return;
+        const rowFields = classifiedRowFields(rawCells, headCells, picked);
         out.push({
           period: period || formatPeriods(headerPeriod) || '—',
           name: name || '未命名课程',
           room: room || '未标注教室',
           className: className,
           teacher: teacher,
+          fields: rowFields,
           docId: d.id
         });
       });
@@ -1326,13 +1396,18 @@
 
     const courseHtml = courses.length
       ? courses.map(function (c, i) {
+          const fields = (c.fields && c.fields.length ? c.fields : fallbackFields(c))
+            .filter(function (f) { return f.label !== '节次' && f.label !== '课时' && f.label !== '课程名称'; });
+          const fieldHtml = fields.length
+            ? '<span class="sc-fields">' + fields.map(function (f) {
+                return '<span class="sc-field"><em>' + esc(String(f.label)) + '</em>' +
+                  '<span>' + esc(String(f.value)) + '</span></span>';
+              }).join('') + '</span>'
+            : '';
           return '<div class="sched-course neu">' +
             '<span class="sc-period">' + (/^\d/.test(String(c.period)) ? '第 ' + esc(String(c.period)) + ' 节' : esc(String(c.period))) + '</span>' +
             '<span class="sc-main"><b>' + esc(String(c.name)) + '</b>' +
-            '<span class="sc-room">' + UI.icon('folder') + esc(String(c.room)) +
-            (c.className ? ' · ' + esc(String(c.className)) : '') +
-            (c.teacher ? ' · ' + esc(String(c.teacher)) : '') + '</span>' +
-            '</span>' +
+            fieldHtml + '</span>' +
             '<span class="sc-no">' + (i + 1) + '</span>' +
             '</div>';
         }).join('')
@@ -1491,9 +1566,16 @@
       return text.indexOf(kw) >= 0;
     }
     if (!rows.length) { UI.toast('课表里没有找到「' + w + '」对应的表格行'); return; }
+    const classes = head.filter(function (h) { return String(h || '').trim() && !isSchedulePrivateToken(h); });
+    const summary = classes.length
+      ? '<div class="rp-classify"><span class="rp-cls-title">表头分类</span>' +
+        classes.map(function (h) {
+          return '<em>' + esc(String(h).trim()) + '</em>';
+        }).join('') + '</div>'
+      : '';
     UI.openRowPanel('关键词「' + w + '」· ' + rows.length + ' 行',
-      UI.rowTableHtml({ head: head, rows: rows, query: w }),
-      '课表栏目 · 表格横向信息');
+      summary + UI.rowTableHtml({ head: head, rows: rows, query: w }),
+      '课表栏目 · 横向行按表头分类');
   }
 
   async function openScheduleKeywordEditor() {
@@ -1559,11 +1641,16 @@
     }
     const saved = (sc.courses || {})[dayIdx];
     const list = (saved && saved.length ? saved : extractRows()).map(function (c) {
-      return { period: c.period, name: c.name, room: c.room, className: c.className || '', teacher: c.teacher || '' };
+      return {
+        period: c.period, name: c.name, room: c.room,
+        className: c.className || '', teacher: c.teacher || '',
+        fields: (c.fields && c.fields.length ? c.fields : fallbackFields(c))
+      };
     });
 
     function rowHtml(c) {
-      return '<div class="sc-edit-card">' +
+      const fdata = esc(JSON.stringify(c.fields || []));
+      return '<div class="sc-edit-card" data-sc-fields="' + fdata + '">' +
         '<div class="sc-edit-row">' +
         '<input class="input sc-ed-p" value="' + esc(String(c.period)) + '" aria-label="第几节" placeholder="节次">' +
         '<input class="input sc-ed-n" value="' + esc(String(c.name)) + '" aria-label="课程" placeholder="课程">' +
@@ -1614,14 +1701,24 @@
           if (e.target.closest('[data-sc-add]')) { wrap.insertAdjacentHTML('beforeend', rowHtml({ period: '', name: '', room: '' })); return; }
           if (e.target.closest('[data-sc-from-auto]')) { wrap.innerHTML = extractRows().map(rowHtml).join(''); return; }
           if (e.target.closest('[data-sc-save]')) {
-            const rows = UI.$$('.sc-edit-card', wrap).map(function (r) {
-              return {
+            const rows = UI.$$('.sc-edit-card', wrap).map(function (r, i) {
+              const values = {
                 period: r.querySelector('.sc-ed-p').value.trim() || '—',
                 name: r.querySelector('.sc-ed-n').value.trim() || '未命名课程',
                 room: r.querySelector('.sc-ed-r').value.trim() || '未标注教室',
                 className: (r.querySelector('.sc-ed-c') || {}).value ? r.querySelector('.sc-ed-c').value.trim() : '',
                 teacher: (r.querySelector('.sc-ed-t') || {}).value ? r.querySelector('.sc-ed-t').value.trim() : ''
               };
+              let baseFields = [];
+              try { baseFields = JSON.parse(r.getAttribute('data-sc-fields') || '[]'); } catch (e) { baseFields = []; }
+              if (!baseFields.length) baseFields = fallbackFields(values);
+              values.fields = baseFields.map(function (f) {
+                return {
+                  label: f.label, key: f.key,
+                  value: f.key && values[f.key] != null ? values[f.key] : f.value
+                };
+              });
+              return values;
             });
             sc.courses = sc.courses || {};
             sc.courses[dayIdx] = rows;
