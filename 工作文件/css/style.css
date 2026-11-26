@@ -3216,3 +3216,12 @@ html, body {
   box-shadow: 0 3px 10px rgba(108, 139, 245, .25);
 }
 .sched-kwline .kw-chip.on:hover { filter: brightness(1.03); }
+
+/* v2.22.0 关键词拖动排序与多选交集 */
+.sched-kwline .kw-chip[data-sched-kw-pick] { cursor: grab; touch-action: pan-y; }
+.sched-kwline.dragging .kw-chip { transition: transform .12s ease; }
+.sched-kwline .kw-chip.dragging {
+  pointer-events: none; opacity: .72; cursor: grabbing;
+  box-shadow: 0 6px 18px rgba(45, 70, 130, .22);
+  position: relative; z-index: 2;
+}

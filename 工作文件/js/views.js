@@ -13,7 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeyword: '' },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [] },
     memoEditId: null,
     docs: [],
     series: [],
@@ -53,7 +53,13 @@
       sc.previewId = (await DB.getSetting('schedulePreviewId', null)) || null;
       sc.seriesName = (await DB.getSetting('scheduleSeriesName', '课表')) || '课表';
       sc.fieldKeywords = Object.assign(defaultFieldKeywords(), (await DB.getSetting('scheduleFieldKeywords', {})) || {});
-      sc.activeKeyword = (await DB.getSetting('scheduleActiveKeyword', '')) || '';
+      const savedMulti = await DB.getSetting('scheduleActiveKeywords', null);
+      if (Array.isArray(savedMulti)) {
+        sc.activeKeywords = savedMulti.filter(function (k) { return !!String(k || '').trim(); });
+      } else {
+        const legacy = String((await DB.getSetting('scheduleActiveKeyword', '')) || '').trim();
+        sc.activeKeywords = legacy ? [legacy] : [sc.keywords[0] || ''].filter(Boolean);
+      }
       /* 只保留当前课表系列里的文件；没有勾过就默认取最新一份 */
       const allowed = scheduleSeriesDocs();
       const kept = (sc.docIds || []).filter(function (id) {
@@ -74,7 +80,8 @@
     await DB.setSetting('schedulePreviewId', sc.previewId);
     await DB.setSetting('scheduleSeriesName', sc.seriesName);
     await DB.setSetting('scheduleFieldKeywords', sc.fieldKeywords || defaultFieldKeywords());
-    await DB.setSetting('scheduleActiveKeyword', sc.activeKeyword || '');
+    await DB.setSetting('scheduleActiveKeywords', sc.activeKeywords || []);
+    await DB.setSetting('scheduleActiveKeyword', (sc.activeKeywords || [])[0] || '');
   }
 
   async function saveEventOverrides() {
@@ -1287,7 +1294,8 @@
       lines.forEach(function (line, lineIdx) {
         if (header && lineIdx === header.row) return;
         const s = line.trim();
-        if (!s || s.length > 300) return;
+        /* 原表列多时一行可能超过 300 字，不能用旧上限把整行丢掉 */
+        if (!s || s.length > 2000) return;
         const dayHit = s.indexOf(dayA) >= 0 || s.indexOf(dayB) >= 0;
         if (!dayHit && anyDayRe.test(s)) return;
 
@@ -1453,20 +1461,17 @@
       }).join('') + '</div>';
   }
 
-  /* 当前选中的关键词：没选或关键词被删掉时回落到第一个 */
-  function currentScheduleKeyword() {
+  /* 当前选中的关键词集合：被删掉的一律剔除，全不选表示不筛选 */
+  function currentScheduleKeywords() {
     const list = (state.schedule.keywords || []).filter(function (k) { return !!String(k || '').trim(); });
-    const active = String(state.schedule.activeKeyword || '').trim();
-    if (active && list.indexOf(active) >= 0) return active;
-    return list[0] || '';
+    return (state.schedule.activeKeywords || []).filter(function (k) { return list.indexOf(k) >= 0; });
+  }
+  function currentScheduleKeyword() {
+    return currentScheduleKeywords()[0] || '';
   }
 
-  /* 一节课是否属于某个关键词：优先用提取时记录的命中列表，
-     手动编辑的历史数据则在字段和显示值里兜底匹配。 */
-  function courseMatchesKeyword(c, kw) {
-    const w = String(kw || '').trim();
-    if (!w) return true;
-    if (c.hits && c.hits.length) return c.hits.indexOf(w) >= 0;
+  /* 手动编辑或历史数据没有 hits 时，在分类字段和显示值里兜底匹配 */
+  function courseTextMatchesKeyword(c, w) {
     const fields = (c.fields && c.fields.length) ? c.fields : fallbackFields(c);
     const inFields = fields.some(function (f) {
       return String(f.label || '').indexOf(w) >= 0 || String(f.value || '').indexOf(w) >= 0;
@@ -1474,6 +1479,16 @@
     if (inFields) return true;
     return [c.name, c.room, c.className, c.teacher, c.period]
       .some(function (v) { return String(v || '').indexOf(w) >= 0; });
+  }
+
+  /* 多选取交集：每个选中的关键词都要命中这一节课 */
+  function courseMatchesKeywords(c, kws) {
+    const list = (kws || []).filter(function (k) { return !!String(k || '').trim(); });
+    if (!list.length) return true;
+    if (c.hits && c.hits.length) {
+      return list.every(function (k) { return c.hits.indexOf(k) >= 0; });
+    }
+    return list.every(function (k) { return courseTextMatchesKeyword(c, k); });
   }
 
   function scheduleHtml(todayStr) {
@@ -1484,8 +1499,10 @@
     const md = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
     const auto = extractCourses(docs, sc.keywords, dayIdx, sc.fieldKeywords);
     const allCourses = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
-    const activeKw = currentScheduleKeyword();
-    const courses = activeKw ? allCourses.filter(function (c) { return courseMatchesKeyword(c, activeKw); }) : allCourses;
+    const activeKws = currentScheduleKeywords();
+    const courses = activeKws.length
+      ? allCourses.filter(function (c) { return courseMatchesKeywords(c, activeKws); })
+      : allCourses;
     const week = (sc.week == null || sc.week === '') ? 1 : sc.week;
 
     const courseHtml = courses.length
@@ -1517,7 +1534,9 @@
             '</div>';
         }).join('')
       : emptyBlock('今天没有识别到相关课程', docs.length
-        ? (activeKw ? '关键词「' + activeKw + '」在这一天没有命中课程，换个关键词试试' : '点「编辑课程」手动填写，或检查关键词设置')
+        ? (activeKws.length
+          ? '关键词「' + esc(activeKws.join(' + ')) + '」在这一天没有同时命中的课程，可少选几个关键词'
+          : '点「编辑课程」手动填写，或检查关键词设置')
         : '先点右上角文件图标加入课表文件');
 
     return '<div class="topbar"><div>' +
@@ -1534,17 +1553,20 @@
       '<button class="sh-week" data-sched-week type="button">第 ' + esc(String(week)) + ' 周 <i>编辑</i></button></div>' +
       '</div>' +
       '<div class="sched-kwline">' +
-      (sc.keywords || []).slice(0, 14).map(function (k) {
-        return '<button class="kw-chip' + (k === activeKw ? ' on' : '') + '" data-sched-kw-pick="' +
-          esc(String(k)) + '" type="button" aria-pressed="' + (k === activeKw ? 'true' : 'false') + '">' +
-          esc(String(k)) + '</button>';
+      (sc.keywords || []).slice(0, 14).map(function (k, i) {
+        const on = activeKws.indexOf(k) >= 0;
+        return '<button class="kw-chip' + (on ? ' on' : '') + '" data-sched-kw-pick="' +
+          esc(String(k)) + '" data-kw-index="' + i + '" type="button" aria-pressed="' +
+          (on ? 'true' : 'false') + '" title="点击选中/取消，横向拖动可排序">' + esc(String(k)) + '</button>';
       }).join('') +
       '<button class="kw-chip add" data-sched-kw type="button">＋ 编辑关键词</button>' +
       '</div>' +
       '<div class="section-title"><span>今日课程</span><span class="title-side">' +
       '<span class="count">' + courses.length + ' 节 · ' +
-      (activeKw ? '关键词「' + esc(activeKw) + '」' : (sc.useAuto ? '自动提取' : '手动编辑')) + '</span>' +
-      (activeKw ? '<button class="section-link" data-sched-kw-rows type="button" title="查看这个关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
+      (activeKws.length
+        ? '关键词「' + esc(activeKws.join(' + ')) + '」'
+        : (sc.useAuto ? '自动提取' : '手动编辑')) + '</span>' +
+      (activeKws.length ? '<button class="section-link" data-sched-kw-rows type="button" title="查看选中关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
       '</span></div>' +
       '<div class="sched-list">' + courseHtml + '</div>' +
       '<div class="sched-actions">' +
@@ -1727,7 +1749,8 @@
           if (e.target.closest('[data-sched-kw-save]')) {
             const sc = state.schedule;
             sc.keywords = ta.value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
-            if (sc.keywords.indexOf(sc.activeKeyword) < 0) sc.activeKeyword = sc.keywords[0] || '';
+            sc.activeKeywords = (sc.activeKeywords || []).filter(function (k) { return sc.keywords.indexOf(k) >= 0; });
+            if (!sc.activeKeywords.length && sc.keywords.length) sc.activeKeywords = [sc.keywords[0]];
             saveSchedule().then(function () {
               UI.closeDrawer();
               render('schedule');
@@ -3913,6 +3936,56 @@
     bg.style.width = on.offsetWidth + 'px';
   }
 
+  /* 课表关键词拖动排序：鼠标与触屏共用指针事件，纵向仍可正常滚动 */
+  let lastKwDragEnd = 0;
+  function bindScheduleKeywordDrag(section) {
+    const line = section.querySelector('.sched-kwline');
+    if (!line) return;
+    let drag = null;
+    line.addEventListener('pointerdown', function (e) {
+      const chip = e.target.closest('.kw-chip[data-sched-kw-pick]');
+      if (!chip || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      drag = { chip: chip, id: e.pointerId, x: e.clientX, y: e.clientY, active: false };
+    });
+    line.addEventListener('pointermove', function (e) {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      if (!drag.active) {
+        if (Math.abs(dx) < 10 || Math.abs(dx) <= Math.abs(dy)) return;
+        drag.active = true;
+        drag.chip.classList.add('dragging');
+        line.classList.add('dragging');
+      }
+      if (e.cancelable) e.preventDefault();
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const other = under && under.closest('.kw-chip[data-sched-kw-pick]');
+      if (other && other !== drag.chip && line.contains(other)) {
+        const r = other.getBoundingClientRect();
+        line.insertBefore(drag.chip, e.clientX < r.left + r.width / 2 ? other : other.nextSibling);
+      }
+    });
+    function finish(e) {
+      if (!drag || (e && e.pointerId !== drag.id)) return;
+      const d = drag;
+      drag = null;
+      if (!d.active) return;
+      lastKwDragEnd = Date.now();
+      d.chip.classList.remove('dragging');
+      line.classList.remove('dragging');
+      const shown = Array.from(line.querySelectorAll('.kw-chip[data-sched-kw-pick]'))
+        .map(function (x) { return x.getAttribute('data-sched-kw-pick'); });
+      const sc = state.schedule;
+      const next = shown.concat((sc.keywords || []).slice(shown.length));
+      const changed = next.some(function (w, i) { return w !== sc.keywords[i]; });
+      if (!changed) { render('schedule'); return; }
+      sc.keywords = next;
+      saveSchedule().then(function () { render('schedule'); UI.toast('关键词顺序已保存', 'ok'); });
+    }
+    line.addEventListener('pointerup', finish);
+    line.addEventListener('pointercancel', finish);
+  }
+
   function bindChips(section) {
     UI.$$('[data-chips]', section).forEach(positionChipBg);
     requestAnimationFrame(function () { UI.$$('[data-chips]', section).forEach(positionChipBg); });
@@ -3940,6 +4013,7 @@
 
   function bind(section) {
     const tab = state.tab;
+    if (tab === 'schedule') bindScheduleKeywordDrag(section);
 
     section.onclick = async function (e) {
       const navBtn = e.target.closest('[data-nav]');
@@ -3956,8 +4030,14 @@
       }
       const schedKwPick = e.target.closest('[data-sched-kw-pick]');
       if (schedKwPick) {
+        if (Date.now() - lastKwDragEnd < 300) return;
         const sc = state.schedule;
-        sc.activeKeyword = schedKwPick.getAttribute('data-sched-kw-pick') || '';
+        const w = schedKwPick.getAttribute('data-sched-kw-pick') || '';
+        const cur = currentScheduleKeywords();
+        const at = cur.indexOf(w);
+        if (at >= 0) cur.splice(at, 1);
+        else cur.push(w);
+        sc.activeKeywords = cur;
         await saveSchedule();
         await render('schedule');
         return;
