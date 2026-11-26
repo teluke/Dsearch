@@ -105,6 +105,8 @@
         /* 这一期被手动改过：标题、日期区间、提醒天数、说明以修改为准 */
         const overrideId = s.id + '@' + key;
         const o = overrides[overrideId] || {};
+        /* 手动删除的期数直接不产出，系列模板与其他周期不受影响 */
+        if (o.removed) { continue; }
         const startISO = o.startISO || baseStartISO;
         const endISO = o.endISO || baseEndISO;
         const label = o.label || (startISO === baseStartISO && endISO === baseEndISO

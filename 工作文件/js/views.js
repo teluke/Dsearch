@@ -691,6 +691,10 @@
       filterHtml +
       memoQuickAddHtml(todayStr, dayFilter) +
       todoHtml +
+      (removedEventCount()
+        ? '<div class="ev-restore"><span>已删除 ' + removedEventCount() + ' 期事件</span>' +
+          '<button class="section-link" data-ev-restore type="button">恢复全部' + UI.icon('chev') + '</button></div>'
+        : '') +
       (kw.html ? kw.html : '') +
       '<div class="section-title"><span>本周日程</span><span class="count">点日期看当天</span></div>' +
       calHtml +
@@ -1136,11 +1140,14 @@
   function headerKeyOf(label) {
     const t = String(label || '').replace(/\s/g, '');
     if (!t) return '';
-    if (/节次|课时/.test(t)) return 'period';
+    /* 「开课时间」里含有「课时」两字，不能误判成节次列 */
+    if (/节次/.test(t) || (/课时/.test(t) && !/时间/.test(t))) return 'period';
     if (isNameHeader(t)) return 'name';
     if (/上课地点|教室|地点|教学楼|实训室|实验室/.test(t)) return 'room';
     if (/上课班级|班级|教学班/.test(t)) return 'className';
     if (/授课教师|任课教师|教师|老师/.test(t)) return 'teacher';
+    if (/开课时间|上课时间|时间段|节次时间/.test(t)) return 'time';
+    if (/^星期|星期$/.test(t)) return 'day';
     return '';
   }
   function isNameHeader(t) {
@@ -1263,7 +1270,10 @@
 
   /* cleanCell 复用隐私过滤，单元格里出现工号/学号这类值直接当空。
      fieldMap 为编辑抽屉里手选的「字段 → 关键词」，空值沿用自动识别。 */
-  function extractCourses(docs, keywords, dayIdx, fieldMap) {
+  /* opts.allDays: 选中关键词后要看整张表里该关键词的全部课程，不再只取当天 */
+  function extractCourses(docs, keywords, dayIdx, fieldMap, opts) {
+    const allDays = !!(opts && opts.allDays);
+    const limit = (opts && opts.limit) || 12;
     const out = [];
     const dayA = SCHEDULE_DAYS[dayIdx];
     const dayB = SCHEDULE_DAYS_CN[dayIdx];
@@ -1297,7 +1307,8 @@
         /* 原表列多时一行可能超过 300 字，不能用旧上限把整行丢掉 */
         if (!s || s.length > 2000) return;
         const dayHit = s.indexOf(dayA) >= 0 || s.indexOf(dayB) >= 0;
-        if (!dayHit && anyDayRe.test(s)) return;
+        /* 只取当天时，带别的星期字样的行直接跳过；关键词视图则保留所有日期 */
+        if (!allDays && !dayHit && anyDayRe.test(s)) return;
 
         const rawCells = splitScheduleCells(s);
         /* 手选关键词优先：表头有这一列就取该列；否则认行内「关键词 值」 */
@@ -1439,7 +1450,7 @@
         });
       });
     });
-    return out.slice(0, 12);
+    return out.slice(0, limit);
   }
 
   function scheduleFilePreviewHtml(docs, previewId, seriesNameText) {
@@ -1497,16 +1508,27 @@
     const dayIdx = weekdayIndex(todayStr);
     const dt = new Date(todayStr + 'T00:00:00');
     const md = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
-    const auto = extractCourses(docs, sc.keywords, dayIdx, sc.fieldKeywords);
-    const allCourses = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
     const activeKws = currentScheduleKeywords();
-    const courses = activeKws.length
-      ? allCourses.filter(function (c) { return courseMatchesKeywords(c, activeKws); })
-      : allCourses;
+    const kwMode = activeKws.length > 0;
+
+    /* 选中关键词时直接展示原表里命中这些关键词的横向行，
+       数据和「查看原表」面板同源，避免两边各算一份对不上。
+       表头识别不出来时退回按当天提取的结果，只做关键词筛选。 */
+    const auto = extractCourses(docs, sc.keywords, dayIdx, sc.fieldKeywords);
+    const base = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
+    const view = kwMode ? keywordRowsView(scheduleKeywordRows(activeKws), dayIdx, activeKws) : null;
+    /* 今天手动改过课程时以手改为准，不再用原表行覆盖 */
+    const manualToday = !sc.useAuto && !!(((sc.courses || {})[dayIdx]) || []).length;
+    const rowMode = !!(kwMode && view && view.cols.length && !manualToday);
+    const courses = rowMode ? view.courses
+      : (kwMode ? base.filter(function (c) { return courseMatchesKeywords(c, activeKws); }) : base);
+    const todayCourses = rowMode ? courses.filter(function (c) { return c.today; }) : courses;
     const week = (sc.week == null || sc.week === '') ? 1 : sc.week;
 
     const courseHtml = courses.length
-      ? courses.map(function (c, i) {
+      ? (rowMode
+        ? courses.map(function (c, i) { return kwCourseCardHtml(c, i); }).join('')
+        : courses.map(function (c, i) {
           const allFields = (c.fields && c.fields.length ? c.fields : fallbackFields(c))
             .filter(function (f) {
               const label = String(f.label || '');
@@ -1532,12 +1554,17 @@
             fieldHtml + '</span>' +
             '<span class="sc-no">' + (i + 1) + '</span>' +
             '</div>';
-        }).join('')
-      : emptyBlock('今天没有识别到相关课程', docs.length
-        ? (activeKws.length
-          ? '关键词「' + esc(activeKws.join(' + ')) + '」在这一天没有同时命中的课程，可少选几个关键词'
+        }).join(''))
+      : emptyBlock(kwMode ? '没有找到对应的课程行' : '今天没有识别到课程', docs.length
+        ? (kwMode
+          ? '关键词「' + esc(activeKws.join(' + ')) + '」在原表里没有命中任何行，点「查看原表」核对表头写法'
           : '点「编辑课程」手动填写，或检查关键词设置')
         : '先点右上角文件图标加入课表文件');
+
+    const summaryHtml = rowMode ? kwSummaryHtml(view, activeKws, todayCourses, courses) : '';
+    const countText = rowMode
+      ? courses.length + ' 节 · ' + (todayCourses.length ? '今日 ' + todayCourses.length + ' 节' : '今日无课')
+      : courses.length + ' 节 · ' + (kwMode ? '关键词「' + activeKws.join(' + ') + '」' : (sc.useAuto ? '自动提取' : '手动编辑'));
 
     return '<div class="topbar"><div>' +
       '<p class="meta">今日课表 · ' + esc(todayStr) + '</p>' +
@@ -1562,13 +1589,11 @@
       '<button class="kw-chip add" data-sched-kw type="button">＋ 编辑关键词</button>' +
       '</div>' +
       '<div class="section-title"><span>今日课程</span><span class="title-side">' +
-      '<span class="count">' + courses.length + ' 节 · ' +
-      (activeKws.length
-        ? '关键词「' + esc(activeKws.join(' + ')) + '」'
-        : (sc.useAuto ? '自动提取' : '手动编辑')) + '</span>' +
-      (activeKws.length ? '<button class="section-link" data-sched-kw-rows type="button" title="查看选中关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
+      '<span class="count">' + esc(countText) + '</span>' +
+      (kwMode ? '<button class="section-link" data-sched-kw-rows type="button" title="查看选中关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
       '</span></div>' +
-      '<div class="sched-list">' + courseHtml + '</div>' +
+      summaryHtml +
+      '<div class="sched-list' + (rowMode ? ' kwc-list' : '') + '">' + courseHtml + '</div>' +
       '<div class="sched-actions">' +
       '<button class="btn" data-sched-edit type="button">' + UI.icon('edit') + '编辑课程</button>' +
       '<button class="btn' + (sc.useAuto ? '' : ' primary') + '" data-sched-mode type="button">' + (sc.useAuto ? '切换到手动编辑' : '直接使用提取结果') + '</button>' +
@@ -1667,40 +1692,225 @@
 
   /* 点课表关键词：把课表文件里含这个词的表格行按表头对齐，放大到屏幕中央。
      关键词正好是表头列名（如「授课教师」）时，列出该列所有数据行。 */
-  async function openScheduleKeywordRows(word) {
-    const w = String(word || '').trim();
-    if (!w) return;
+  /* 选中关键词 → 原表横向行。和「查看原表」面板共用同一套取数逻辑，
+     保证卡片里看到的行就是表格里的那一行，不再各算一份。 */
+  function scheduleKeywordRows(words) {
+    const list = (Array.isArray(words) ? words : [words])
+      .map(function (w) { return String(w || '').trim(); })
+      .filter(function (w) { return w && !isSchedulePrivateToken(w); });
+    const out = { head: [], rows: [], colOf: {} };
     const docs = scheduleSelectedDocs();
-    if (!docs.length) { UI.toast('先点右上角文件图标加入课表文件'); return; }
-    let head = [];
-    let colIdx = -1;
-    const rows = [];
+    if (!list.length || !docs.length) return out;
     docs.forEach(function (d) {
       const lines = scheduleTextOf(d).split(/\r?\n/);
       const header = scheduleHeaderMap(lines);
-      if (header && !head.length) head = splitScheduleCells(lines[header.row]);
-      if (header) {
-        for (let i = 0; i < head.length; i++) {
-          if (head[i] && head[i].indexOf(w) >= 0) { colIdx = i; break; }
-        }
-      }
+      if (header && !out.head.length) out.head = splitScheduleCells(lines[header.row]);
+      const dataRows = [];
       lines.forEach(function (line, idx) {
         if (header && idx === header.row) return;
         const s = String(line || '').trim();
-        if (!s || (!colIdxIsHit(colIdx, s, w))) return;
-        const cells = splitScheduleCells(s).map(function (c) {
-          const v = String(c || '').trim();
-          return isSchedulePrivateToken(v) ? '' : v;
+        if (!s || s.length > 2000) return;
+        const cells = splitScheduleCells(s);
+        if (!cells.some(function (c) { return String(c || '').trim(); })) return;
+        dataRows.push(cells);
+      });
+      const colOf = {};
+      const headerWord = {};
+      list.forEach(function (w) {
+        let col = -1;
+        let byHeader = false;
+        out.head.forEach(function (h, i) {
+          if (col >= 0) return;
+          const t = cleanDisplayCell(h);
+          if (!t || isSchedulePrivateHeader(t)) return;
+          if (t === w || (w.length >= 2 && t.indexOf(w) >= 0)) { col = i; byHeader = true; }
         });
-        if (colIdx >= 0 && !cells[colIdx]) return;
-        if (cells.some(function (c) { return c; })) rows.push(cells);
+        if (col < 0) {
+          out.head.forEach(function (h, i) {
+            if (col >= 0) return;
+            const t = cleanDisplayCell(h);
+            if (!t || isSchedulePrivateHeader(t)) return;
+            if (dataRows.some(function (c) { return cleanDisplayCell(c[i]) === w; })) col = i;
+          });
+        }
+        colOf[w] = col;
+        headerWord[w] = byHeader;
+        if (col >= 0 && out.colOf[w] == null) out.colOf[w] = col;
+      });
+      dataRows.forEach(function (cells) {
+        const ok = list.every(function (w) {
+          const col = colOf[w];
+          if (col >= 0) {
+            const v = cleanDisplayCell(cells[col]);
+            if (!v || isSchedulePrivateToken(v)) return false;
+            /* 表头型关键词：该列有值即算命中；值型关键词：该列要包含这个词 */
+            return headerWord[w] ? true : v.indexOf(w) >= 0;
+          }
+          return cells.some(function (c) { return String(c || '').indexOf(w) >= 0; });
+        });
+        if (ok) out.rows.push(cells);
       });
     });
-    function colIdxIsHit(col, text, kw) {
-      if (col >= 0) return true;
-      return text.indexOf(kw) >= 0;
+    return out;
+  }
+
+  /* 把原表行转成卡片数据：每列「表头：值」原样保留，隐私列整列剔除 */
+  function keywordRowsView(kwRows, dayIdx, activeKws) {
+    const cols = [];
+    (kwRows.head || []).forEach(function (h, i) {
+      const label = cleanDisplayCell(h);
+      if (!label) return;
+      if (isSchedulePrivateHeader(label) || isSchedulePrivateToken(label)) return;
+      cols.push({ i: i, label: label, key: headerKeyOf(label) });
+    });
+    const markedCols = {};
+    (activeKws || []).forEach(function (w) {
+      const col = kwRows.colOf[w];
+      if (col != null) markedCols[col] = true;
+    });
+    /* 「周四 56节」「第5-6节」「5-6」都要能还原成节次 */
+    function periodFromText(v) {
+      const t = String(v || '');
+      const m = t.match(/([0-9]{1,2})\s*[-~—至]\s*([0-9]{1,2})\s*节/);
+      if (m) return m[1] + '-' + m[2];
+      const one = t.match(/(?:周[一二三四五六日天]|星期[一二三四五六日天]|第\s*)?([0-9]{1,2})\s*节/);
+      return one ? formatPeriods(one[1]) : '';
     }
-    if (!rows.length) { UI.toast('课表里没有找到「' + w + '」对应的表格行'); return; }
+    /* 教室列可能有好几个：优先「上课地点」，其次教室，最后才用教学楼 */
+    function roomPriority(label) {
+      const t = String(label || '').replace(/\s/g, '');
+      if (/^上课地点$/.test(t)) return 3;
+      if (/上课教室|教室$|^教室/.test(t)) return 2;
+      if (/地点|实验|实训/.test(t)) return 2;
+      if (/教学楼|^楼$/.test(t)) return 1;
+      return 1;
+    }
+    const courses = (kwRows.rows || []).map(function (cells, rowIdx) {
+      const joined = cells.join(' ');
+      const days = [];
+      SCHEDULE_DAYS.forEach(function (d, i) {
+        if (joined.indexOf(d) >= 0 || joined.indexOf(SCHEDULE_DAYS_CN[i]) >= 0) days.push(i);
+      });
+      const fields = [];
+      let period = '';
+      let name = '';
+      let room = '';
+      let roomPri = -1;
+      let className = '';
+      let teacher = '';
+      let dayText = '';
+      cols.forEach(function (c) {
+        const v = cleanDisplayCell(cells[c.i]);
+        if (!v || isSchedulePrivateToken(v)) return;
+        if (c.key === 'period' && !period) period = formatPeriods(v);
+        if (c.key === 'name' && !name) name = v;
+        if (c.key === 'room') {
+          const pri = roomPriority(c.label);
+          if (pri > roomPri) { room = v; roomPri = pri; }
+        }
+        if (c.key === 'className' && !className) className = v;
+        if (c.key === 'teacher' && !teacher) teacher = v;
+        if (!dayText && (c.key === 'time' || c.key === 'day' || /星期|开课时间|上课时间|时间段/.test(c.label))) dayText = v;
+        fields.push({ label: c.label, value: v, key: c.key || '', marked: !!markedCols[c.i] });
+      });
+      if (!period) period = periodFromText(dayText);
+      if (!period) {
+        cols.forEach(function (c) {
+          if (period) return;
+          if (c.key === 'time' || c.key === 'period' || /时间|节次/.test(c.label)) {
+            period = periodFromText(cells[c.i]);
+          }
+        });
+      }
+      if (!name) {
+        fields.forEach(function (f) {
+          if (!/[\u4e00-\u9fa5]/.test(f.value)) return;
+          if (f.value.length > name.length) name = f.value;
+        });
+      }
+      return {
+        period: period || '—',
+        name: name || '未命名课程',
+        room: room,
+        className: className,
+        teacher: teacher,
+        /* 节次和课程名已经在卡片标题上，正文里不再重复 */
+        fields: fields.filter(function (f) { return f.key !== 'period' && f.key !== 'name'; }),
+        today: days.indexOf(dayIdx) >= 0,
+        dayText: dayText,
+        order: rowIdx
+      };
+    });
+    /* 今日的排前面，其余保持原表顺序 */
+    courses.sort(function (a, b) {
+      if (a.today !== b.today) return a.today ? -1 : 1;
+      return a.order - b.order;
+    });
+    return { head: kwRows.head, rows: kwRows.rows, colOf: kwRows.colOf, cols: cols, courses: courses };
+  }
+
+  /* 关键词在表格里属于哪一栏：值型关键词反查列名，表头型关键词直接用该列名 */
+  function keywordColumnLabel(kwRows, word) {
+    const col = kwRows.colOf[word];
+    if (col == null) return '';
+    const label = cleanDisplayCell((kwRows.head || [])[col]);
+    if (!label || isSchedulePrivateHeader(label) || isSchedulePrivateToken(label)) return '';
+    return label;
+  }
+
+  function kwSummaryHtml(view, activeKws, todayCourses, allCourses) {
+    if (!view) return '';
+    const subject = (activeKws || []).map(function (w) {
+      const label = keywordColumnLabel(view, w);
+      return (label ? label + '「' + w + '」' : '关键词「' + w + '」');
+    }).join(' + ');
+    const parts = todayCourses.map(function (c) {
+      const when = c.period && c.period !== '—' ? '第 ' + c.period + ' 节' : (c.dayText || '');
+      const where = c.room || c.className || '';
+      return when + (c.name ? '《' + c.name + '》' : '') + (where ? '（' + where + '）' : '');
+    });
+    const detail = todayCourses.length
+      ? '当日课程：' + parts.join('；')
+      : '今天没有排课' + (allCourses.length ? '，下面按原表顺序列出全部 ' + allCourses.length + ' 节' : '');
+    const rest = allCourses.length > todayCourses.length
+      ? '<p class="kws-all">该关键词在原表共 ' + allCourses.length + ' 行，其他日期 ' +
+        (allCourses.length - todayCourses.length) + ' 行一并列在下方</p>'
+      : '';
+    return '<div class="sched-kwsum neu">' +
+      '<p class="kws-title"><b>' + esc(subject) + '</b><span>今日 ' + todayCourses.length + ' 节 / 共 ' + allCourses.length + ' 节</span></p>' +
+      '<p class="kws-line">' + esc(detail) + '</p>' + rest +
+      '</div>';
+  }
+
+  function kwCourseCardHtml(c, i) {
+    const period = /^\d/.test(String(c.period)) ? '第 ' + c.period + ' 节' : c.period;
+    const grid = c.fields.length
+      ? '<dl class="kwc-grid">' + c.fields.map(function (f) {
+          return '<div class="kwc-item' + (f.marked ? ' marked' : '') + '">' +
+            '<dt>' + esc(String(f.label)) + '</dt>' +
+            '<dd>' + esc(String(f.value)) + '</dd></div>';
+        }).join('') + '</dl>'
+      : '';
+    return '<div class="sched-course kwc neu">' +
+      '<div class="kwc-head">' +
+      '<span class="sc-period">' + esc(String(period)) + '</span>' +
+      '<b>' + esc(String(c.name)) + '</b>' +
+      (c.today ? '<span class="kwc-today">今日</span>' : '') +
+      '<span class="kwc-no">' + (i + 1) + '</span>' +
+      '</div>' + grid +
+      '</div>';
+  }
+
+  async function openScheduleKeywordRows(word) {
+    const words = (Array.isArray(word) ? word : [word])
+      .map(function (w) { return String(w || '').trim(); }).filter(Boolean);
+    if (!words.length) return;
+    const docs = scheduleSelectedDocs();
+    if (!docs.length) { UI.toast('先点右上角文件图标加入课表文件'); return; }
+    const collected = scheduleKeywordRows(words);
+    let head = collected.head;
+    const rows = collected.rows;
+    if (!rows.length) { UI.toast('课表里没有找到「' + words.join(' + ') + '」对应的表格行'); return; }
     /* 隐私栏目整列剔除：表头与对应单元格一起去掉，索引仍对齐 */
     const keep = [];
     head.forEach(function (h, i) {
@@ -1715,8 +1925,8 @@
           return '<em>' + esc(String(h).trim()) + '</em>';
         }).join('') + '</div>'
       : '';
-    UI.openRowPanel('关键词「' + w + '」· ' + rows.length + ' 行',
-      summary + UI.rowTableHtml({ head: safeHead, rows: safeRows, query: w }),
+    UI.openRowPanel('关键词「' + words.join(' + ') + '」· ' + rows.length + ' 行',
+      summary + UI.rowTableHtml({ head: safeHead, rows: safeRows, query: words[0] }),
       '课表栏目 · 横向行按表头分类');
   }
 
@@ -2363,6 +2573,55 @@
       '" type="button" title="修改这一期">' + UI.icon('edit') + '修改</button>';
   }
 
+  function evDelBtnHtml(ev) {
+    return '<button class="memo-act ev-del" data-ev-del="' + esc(ev.overrideId) +
+      '" type="button" title="删除这一期事件">' + UI.icon('close') + '删除</button>';
+  }
+
+  /* 删除只针对这一期提醒：写入 removed 覆盖，不动系列模板和文件 */
+  async function deleteEventPeriod(overrideId) {
+    const ev = Events.compute(state.docs, state.series, DB.todayISO()).find(function (x) {
+      return x.overrideId === overrideId;
+    });
+    if (!ev) { UI.toast('这一期事件已经不存在'); return; }
+    const ok = await UI.confirm({
+      title: '删除这一期事件？',
+      message: esc(ev.seriesName) + ' · ' + esc(ev.label) + '<br>只移除这一期提醒，不会删除任何文件；系列模板和其他周期不受影响，需要时可在事件页恢复。',
+      okText: '删除',
+      danger: true
+    });
+    if (!ok) return;
+    const next = Object.assign({}, state.eventOverrides);
+    next[overrideId] = Object.assign({}, next[overrideId] || {}, { removed: true });
+    state.eventOverrides = next;
+    await saveEventOverrides();
+    UI.toast('已删除这一期事件', 'ok');
+    await render(state.tab);
+  }
+
+  function removedEventCount() {
+    const all = state.eventOverrides || {};
+    return Object.keys(all).filter(function (k) { return all[k] && all[k].removed; }).length;
+  }
+
+  async function restoreRemovedEvents() {
+    const next = Object.assign({}, state.eventOverrides);
+    let n = 0;
+    Object.keys(next).forEach(function (k) {
+      if (!next[k] || !next[k].removed) return;
+      const copy = Object.assign({}, next[k]);
+      delete copy.removed;
+      if (Object.keys(copy).length) next[k] = copy;
+      else delete next[k];
+      n++;
+    });
+    if (!n) { UI.toast('没有已删除的事件'); return; }
+    state.eventOverrides = next;
+    await saveEventOverrides();
+    UI.toast('已恢复 ' + n + ' 期事件', 'ok');
+    await render(state.tab);
+  }
+
   function evCardHtml(ev, todayStr, idx) {
     const tag = evTag(ev, todayStr);
     const animStyle = idx != null ? ' style="animation-delay:' + Math.min(idx * 70, 420) + 'ms" data-anim="todo"' : '';
@@ -2382,7 +2641,7 @@
         '</div>' +
         (ev.hint ? '<span class="ev-hint">' + esc(ev.hint) + '</span>' : '') +
         '</div>' +
-        '<span class="ev-side">' + tag + editBtn + '</span>' +
+        '<span class="ev-side">' + tag + editBtn + evDelBtnHtml(ev) + '</span>' +
         '</div>' +
         '</div>';
     }
@@ -2402,7 +2661,7 @@
       '</div>' +
       '<span class="ev-hint">' + esc(hint) + '</span>' +
       '</div>' +
-      '<span class="ev-side">' + tag + editBtn + '</span>' +
+      '<span class="ev-side">' + tag + editBtn + evDelBtnHtml(ev) + '</span>' +
       '</div>' +
       '</div>';
   }
@@ -2524,12 +2783,18 @@
         periodic.length ? '周期事件会在归档对应文档后自动完成；备忘录可在首页快速添加'
           : '在设置里编辑系列模板，开启「每周一份」或「每月一份」后，每个周期会自动生成一条事件');
 
+    const removedCount = removedEventCount();
+    const restoreHtml = removedCount
+      ? '<div class="ev-restore"><span>已删除 ' + removedCount + ' 期事件</span>' +
+        '<button class="section-link" data-ev-restore type="button">恢复全部' + UI.icon('chev') + '</button></div>'
+      : '';
+
     return '<div class="topbar"><div>' +
       '<p class="meta">周期事件与备忘录，按时间排在一起</p>' +
       '<p class="sub">' + periodic.length + ' 个周期系列 · 待完成 ' + todoItems.length + ' · 已完成 ' + doneItems.length + '</p>' +
       '</div></div>' +
       segChipsHtml() +
-      summary +
+      summary + restoreHtml +
       '<div class="chip-scroll" style="margin-top:14px"><div class="chips" data-chips><span class="chip-bg"></span>' + chips + '</div></div>' +
       '<div class="section-title"><span>待办与备忘</span><span class="count">' + todoItems.length + ' 个</span></div>' +
       '<div class="doc-list">' + pendingHtml + '</div>' +
@@ -4025,7 +4290,7 @@
       /* 课表栏目 */
       if (e.target.closest('[data-sched-docs]')) { await openScheduleDocPicker(); return; }
       if (e.target.closest('[data-sched-kw-rows]')) {
-        await openScheduleKeywordRows(currentScheduleKeyword());
+        await openScheduleKeywordRows(currentScheduleKeywords());
         return;
       }
       const schedKwPick = e.target.closest('[data-sched-kw-pick]');
@@ -4364,6 +4629,11 @@
 
       const evEdit = e.target.closest('[data-ev-edit]');
       if (evEdit) { await openEventEditor(evEdit.getAttribute('data-ev-edit')); return; }
+
+      const evDel = e.target.closest('[data-ev-del]');
+      if (evDel) { await deleteEventPeriod(evDel.getAttribute('data-ev-del')); return; }
+
+      if (e.target.closest('[data-ev-restore]')) { await restoreRemovedEvents(); return; }
 
       const openBtn = e.target.closest('[data-open]');
       if (openBtn) {
