@@ -71,6 +71,7 @@
       if (sc.docIds.indexOf(sc.previewId) < 0) sc.previewId = sc.docIds[0] || null;
     } catch (e) { /* 课表设置损坏时用默认值 */ }
     state.loaded = true;
+    DB.takeDirty();
   }
 
   async function saveSchedule() {
@@ -5125,8 +5126,8 @@
 
   async function go(tab) {
     state.tab = tab;
-    /* 数据在增删改后由 refresh() 重读；切标签只换视图，不再整库重读 */
-    if (!state.loaded) await loadAll();
+    /* 首次进入或库里有改动时才重读；单纯切标签只换视图 */
+    if (!state.loaded || DB.takeDirty()) await loadAll();
     await render(tab);
   }
 

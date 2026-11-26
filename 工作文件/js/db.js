@@ -40,6 +40,21 @@
     folders: '++id, name, parentId, createdAt'
   });
 
+  /* 改动标记：文件/系列/文件夹被写过之后，下一次切标签时重新读库，
+     平时切标签就只换视图，不再整库重读（IndexedDB 里带着文件 blob） */
+  let dirty = false;
+  function markDirty() { dirty = true; }
+  ['documents', 'series', 'folders'].forEach(function (name) {
+    ['creating', 'updating', 'deleting'].forEach(function (kind) {
+      db[name].hook(kind, function () { dirty = true; });
+    });
+  });
+  function takeDirty() {
+    const d = dirty;
+    dirty = false;
+    return d;
+  }
+
   const VIEWLOG_KEEP = 500;
 
   const SCHEMA_VERSION = 1;
@@ -162,6 +177,7 @@
   async function clearDocuments() {
     await db.documents.clear();
     await db.viewLogs.clear();
+    markDirty();
   }
 
   async function allDocuments() {
@@ -477,6 +493,7 @@
     getSetting: getSetting,
     setSetting: setSetting,
     setSettings: setSettings,
+    takeDirty: takeDirty,
     allSettings: allSettings,
     storageInfo: storageInfo,
     storageEstimate: storageEstimate,
