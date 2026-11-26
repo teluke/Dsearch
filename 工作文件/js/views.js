@@ -13,6 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null },
     memoEditId: null,
     docs: [],
     series: [],
@@ -37,6 +38,25 @@
     try { state.folders = await DB.listFolders(); } catch (e) { state.folders = []; }
     try { state.kwPinned = (await DB.getSetting('kwPinned', [])) || []; } catch (e) { state.kwPinned = []; }
     try { state.search.filterWords = (await DB.getSetting('searchFilterWords', [])) || []; } catch (e) { state.search.filterWords = []; }
+    try {
+      const sc = state.schedule;
+      sc.docIds = (await DB.getSetting('scheduleDocIds', [])) || [];
+      sc.keywords = (await DB.getSetting('scheduleKeywords', null)) || SCHEDULE_DEFAULT_KW.slice();
+      sc.week = (await DB.getSetting('scheduleWeek', 1)) || 1;
+      sc.courses = (await DB.getSetting('scheduleCourses', {})) || {};
+      sc.useAuto = (await DB.getSetting('scheduleUseAuto', true)) !== false;
+      sc.previewId = (await DB.getSetting('schedulePreviewId', null)) || null;
+    } catch (e) { /* 课表设置损坏时用默认值 */ }
+  }
+
+  async function saveSchedule() {
+    const sc = state.schedule;
+    await DB.setSetting('scheduleDocIds', sc.docIds);
+    await DB.setSetting('scheduleKeywords', sc.keywords);
+    await DB.setSetting('scheduleWeek', sc.week);
+    await DB.setSetting('scheduleCourses', sc.courses);
+    await DB.setSetting('scheduleUseAuto', sc.useAuto);
+    await DB.setSetting('schedulePreviewId', sc.previewId);
   }
 
   function folderById(id) {
@@ -911,6 +931,340 @@
         state.records.filter === 'abnormal' ? '没有待核对的记录' : '这里还没有文件',
         state.records.filter === 'abnormal' ? '所有文件的归档日期与文件名日期都正常' : '归档文件后，双日期会在这里对照显示'
       )) + '</div>';
+  }
+
+  /* ---------- 课表 ---------- */
+
+  const SCHEDULE_DAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  const SCHEDULE_DAYS_CN = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+  const SCHEDULE_DEFAULT_KW = [
+    '第1节', '第2节', '第3节', '第4节', '第5节', '第6节', '第7节', '第8节',
+    '周一', '周二', '周三', '周四', '周五', '周六', '周日',
+    '教室', '教学楼', '实验楼', '实训室', '会议室', '报告厅', '操场', '图书馆', '体育馆', '活动室'
+  ];
+  const CN_NUM = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
+
+  function weekdayIndex(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    return (d.getDay() + 6) % 7;
+  }
+
+  function numFromCn(s) {
+    if (!s) return '';
+    if (/^\d+$/.test(s)) return parseInt(s, 10);
+    if (s === '十') return 10;
+    if (s.indexOf('十') >= 0) {
+      const p = s.split('十');
+      return (p[0] ? (CN_NUM[p[0]] || 1) : 1) * 10 + (p[1] ? (CN_NUM[p[1]] || 0) : 0);
+    }
+    return CN_NUM[s] || s;
+  }
+
+  function scheduleDocById(id) {
+    for (let i = 0; i < state.docs.length; i++) {
+      if (state.docs[i].id === id) return state.docs[i];
+    }
+    return null;
+  }
+
+  function scheduleSelectedDocs() {
+    const ids = state.schedule.docIds || [];
+    return ids.map(scheduleDocById).filter(Boolean);
+  }
+
+  function scheduleTextOf(d) {
+    return [d.fullText, d.ocrText, d.note].filter(Boolean).join('\n');
+  }
+
+  function extractCourses(docs, keywords, dayIdx) {
+    const out = [];
+    const dayA = SCHEDULE_DAYS[dayIdx];
+    const dayB = SCHEDULE_DAYS_CN[dayIdx];
+    const kws = (keywords && keywords.length) ? keywords : SCHEDULE_DEFAULT_KW;
+    const periodRe = /第\s*([一二三四五六七八九十\d]+)\s*节/;
+    const roomRe = /([\u4e00-\u9fa5A-Za-z0-9]{1,10}(?:教室|教学楼|实验楼|实训室|会议室|报告厅|操场|图书馆|体育馆|活动室|楼)\d{0,4}[\u4e00-\u9fa5A-Za-z0-9]{0,6})/;
+    const roomWordRe = /(?:教室|教学楼|实验楼|实训室|会议室|报告厅|操场|图书馆|体育馆|活动室|楼|馆|厅)/;
+    const anyDayRe = /周[一二三四五六日天]|星期[一二三四五六日天]/;
+
+    docs.forEach(function (d) {
+      const text = scheduleTextOf(d);
+      if (!text) return;
+      text.split(/\r?\n/).forEach(function (line) {
+        const s = line.trim();
+        if (!s || s.length > 200) return;
+        const hit = kws.some(function (k) { return k && s.indexOf(k) >= 0; });
+        if (!hit) return;
+        const dayHit = s.indexOf(dayA) >= 0 || s.indexOf(dayB) >= 0;
+        if (!dayHit && anyDayRe.test(s)) return;
+        const pm = s.match(periodRe);
+        const period = pm ? numFromCn(pm[1]) : '';
+        const rest = s.replace(periodRe, '').replace(anyDayRe, '').trim();
+        const parts = rest.split(/\s+/).filter(Boolean);
+        let room = '';
+        const nameParts = parts.slice();
+        for (let i = 0; i < parts.length; i++) {
+          if (roomWordRe.test(parts[i])) {
+            room = parts[i];
+            nameParts.splice(i, 1);
+            break;
+          }
+        }
+        if (!room) {
+          const rm = rest.match(roomRe);
+          if (rm) {
+            room = rm[1];
+            nameParts.length = 0;
+            nameParts.push(rest.replace(room, '').trim());
+          }
+        }
+        const name = nameParts.join(' ').replace(/^[在:：\s\-—·、,，]+|[在:：\s\-—·、,，]+$/g, '').trim();
+        if (!name && !room) return;
+        out.push({
+          period: period || '—',
+          name: name || '未命名课程',
+          room: room || '未标注教室',
+          docId: d.id
+        });
+      });
+    });
+    return out.slice(0, 12);
+  }
+
+  function scheduleFilePreviewHtml(docs, previewId) {
+    if (!docs.length) {
+      return emptyBlock('还没有课表文件', '点右上角的文件图标，把课表文件选进来');
+    }
+    const d = scheduleDocById(previewId) || docs[0];
+    const kind = Parser.kindOf(d.name);
+    return '<div class="sched-file neu">' +
+      '<div class="sf-head"><span class="icon-box ' + kind + '">' + UI.icon(UI.kindIcon(kind)) + '</span>' +
+      '<span class="sf-name">' + esc(d.name) + '</span>' +
+      '<button class="btn" data-sched-zoom="' + d.id + '" type="button">' + UI.icon('search') + '放大查看</button></div>' +
+      '<div class="sf-stage" id="schedStage" data-doc="' + d.id + '"><div class="sf-empty">载入中…</div></div>' +
+      '</div>' +
+      '<div class="sched-docbar">' + docs.map(function (x) {
+        return '<button class="sdoc' + (x.id === d.id ? ' on' : '') + '" data-sched-pick="' + x.id + '" type="button">' +
+          esc(x.name) + '</button>';
+      }).join('') + '</div>';
+  }
+
+  function scheduleHtml(todayStr) {
+    const sc = state.schedule;
+    const docs = scheduleSelectedDocs();
+    const dayIdx = weekdayIndex(todayStr);
+    const dt = new Date(todayStr + 'T00:00:00');
+    const md = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
+    const auto = extractCourses(docs, sc.keywords, dayIdx);
+    const courses = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
+    const week = (sc.week == null || sc.week === '') ? 1 : sc.week;
+
+    const courseHtml = courses.length
+      ? courses.map(function (c, i) {
+          return '<div class="sched-course neu">' +
+            '<span class="sc-period">第 ' + esc(String(c.period)) + ' 节</span>' +
+            '<span class="sc-main"><b>' + esc(String(c.name)) + '</b>' +
+            '<span class="sc-room">' + UI.icon('folder') + esc(String(c.room)) + '</span></span>' +
+            '<span class="sc-no">' + (i + 1) + '</span>' +
+            '</div>';
+        }).join('')
+      : emptyBlock('今天没有识别到课程', docs.length ? '点「编辑课程」手动填写，或检查关键词设置' : '先点右上角文件图标加入课表文件');
+
+    return '<div class="topbar"><div>' +
+      '<p class="meta">今日课表 · ' + esc(todayStr) + '</p>' +
+      '<p class="sub">关键词提取后可直接用，也能手动改</p>' +
+      '</div><div class="topbar-actions">' +
+      '<button class="icon-btn neu press" data-sched-docs type="button" aria-label="选择课表文件" title="选择课表文件">' + UI.icon('file') + '</button>' +
+      '<button class="icon-btn neu press" data-sched-kw type="button" aria-label="编辑提取关键词" title="编辑提取关键词">' + UI.icon('search') + '</button>' +
+      '<button class="icon-btn neu press toggle' + (sc.useAuto ? '' : ' on') + '" data-sched-mode type="button" aria-label="切换提取或编辑" title="切换提取或编辑">' + UI.icon('edit') + '</button>' +
+      '</div></div>' +
+      '<div class="sched-hero neu">' +
+      '<div class="sh-day">' + SCHEDULE_DAYS[dayIdx] + '</div>' +
+      '<div class="sh-meta"><span class="sh-date">' + md + '</span>' +
+      '<button class="sh-week" data-sched-week type="button">第 ' + esc(String(week)) + ' 周 <i>编辑</i></button></div>' +
+      '</div>' +
+      '<div class="sched-kwline">' +
+      (sc.keywords || []).slice(0, 14).map(function (k) {
+        return '<button class="kw-chip" data-sched-kw type="button">' + esc(String(k)) + '</button>';
+      }).join('') +
+      '<button class="kw-chip add" data-sched-kw type="button">＋ 编辑关键词</button>' +
+      '</div>' +
+      '<div class="section-title"><span>今日课程</span><span class="count">' + courses.length + ' 节 · ' + (sc.useAuto ? '自动提取' : '手动编辑') + '</span></div>' +
+      '<div class="sched-list">' + courseHtml + '</div>' +
+      '<div class="sched-actions">' +
+      '<button class="btn" data-sched-edit type="button">' + UI.icon('edit') + '编辑课程</button>' +
+      '<button class="btn' + (sc.useAuto ? '' : ' primary') + '" data-sched-mode type="button">' + (sc.useAuto ? '切换到手动编辑' : '直接使用提取结果') + '</button>' +
+      '</div>' +
+      '<div class="section-title"><span>原文件放大</span><span class="count">' + docs.length + ' 份</span></div>' +
+      scheduleFilePreviewHtml(docs, sc.previewId);
+  }
+
+  async function mountSchedulePreview(section) {
+    const stage = section.querySelector('#schedStage');
+    if (!stage) return;
+    const id = parseInt(stage.getAttribute('data-doc'), 10);
+    const d = await DB.getDocument(id);
+    if (!d || !d.blob) { stage.innerHTML = '<div class="sf-empty">这份文件没有可预览的内容</div>'; return; }
+    const kind = Parser.kindOf(d.name);
+    if (kind === 'image') {
+      if (state.schedule.objUrl) URL.revokeObjectURL(state.schedule.objUrl);
+      const url = URL.createObjectURL(d.blob);
+      state.schedule.objUrl = url;
+      stage.innerHTML = '<img class="sf-img" src="' + url + '" alt="' + esc(d.name) + '">';
+      return;
+    }
+    if (kind === 'pdf' && window.pdfjsLib) {
+      try {
+        const buf = await d.blob.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+        const page = await pdf.getPage(1);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(2, Math.max(0.8, (stage.clientWidth - 24) / base.width));
+        const vp = page.getViewport({ scale: scale });
+        const canvas = document.createElement('canvas');
+        canvas.className = 'sf-canvas';
+        canvas.width = Math.floor(vp.width);
+        canvas.height = Math.floor(vp.height);
+        stage.innerHTML = '';
+        stage.appendChild(canvas);
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      } catch (e) {
+        stage.innerHTML = '<div class="sf-empty">这份 PDF 暂时无法内嵌，点「放大查看」打开</div>';
+      }
+      return;
+    }
+    stage.innerHTML = '<div class="sf-empty">这种格式不能内嵌预览，点「放大查看」用系统应用打开</div>';
+  }
+
+  async function openScheduleDocPicker() {
+    const picked = (state.schedule.docIds || []).map(String);
+    const list = state.docs.map(function (d) {
+      const kind = Parser.kindOf(d.name);
+      return '<label class="pick-row neu"><input type="checkbox" value="' + d.id + '"' + (picked.indexOf(String(d.id)) >= 0 ? ' checked' : '') + '>' +
+        '<span class="icon-box ' + kind + '">' + UI.icon(UI.kindIcon(kind)) + '</span>' +
+        '<span class="pr-main"><b>' + esc(d.name) + '</b><small>' + esc(d.archiveDate || '') + ' · ' + esc(UI.fmtSize(d.size || 0)) + '</small></span></label>';
+    }).join('');
+
+    UI.openDrawer('选择课表文件',
+      '<p class="drawer-hint">勾选要放进课表的文件。正文里的课程和教室会按关键词提取。</p>' +
+      (list || emptyBlock('还没有文件', '先归档一份课表文件') ) +
+      '<div class="drawer-foot"><button class="btn" data-sched-pick-clear type="button">清空选择</button>' +
+      '<button class="btn primary" data-sched-pick-save type="button">保存</button></div>',
+      function (body) {
+        body.onclick = async function (e) {
+          if (e.target.closest('[data-sched-pick-clear]')) {
+            UI.$$('input[type="checkbox"]', body).forEach(function (c) { c.checked = false; });
+            return;
+          }
+          if (e.target.closest('[data-sched-pick-save]')) {
+            const ids = UI.$$('input[type="checkbox"]:checked', body).map(function (c) { return parseInt(c.value, 10); });
+            state.schedule.docIds = ids;
+            if (ids.indexOf(state.schedule.previewId) < 0) state.schedule.previewId = ids[0] || null;
+            await saveSchedule();
+            UI.closeDrawer();
+            await render('schedule');
+            UI.toast('课表文件已更新', 'ok');
+          }
+        };
+      });
+  }
+
+  async function openScheduleKeywordEditor() {
+    const words = (state.schedule.keywords && state.schedule.keywords.length)
+      ? state.schedule.keywords.slice() : SCHEDULE_DEFAULT_KW.slice();
+    const candidates = Keywords.collect(scheduleSelectedDocs(), 24) || [];
+    UI.openDrawer('提取关键词',
+      '<p class="drawer-hint">一行一个。命中的文字行会被抓成课程；星期词用来判断当天。</p>' +
+      '<textarea class="input" id="schedKwText" style="min-height:140px">' + esc(words.join('\n')) + '</textarea>' +
+      (candidates.length
+        ? '<div class="section-title"><span>从课表文件里挑</span></div><div class="kw-pick">' +
+          candidates.map(function (c) {
+            return '<button class="chip" data-sched-kw-add="' + esc(c.word) + '" type="button">' + esc(c.word) + ' ' + c.count + '</button>';
+          }).join('') + '</div>'
+        : '') +
+      '<div class="drawer-foot"><button class="btn" data-sched-kw-reset type="button">恢复默认</button>' +
+      '<button class="btn primary" data-sched-kw-save type="button">保存</button></div>',
+      function (body) {
+        const ta = body.querySelector('#schedKwText');
+        body.onclick = function (e) {
+          const add = e.target.closest('[data-sched-kw-add]');
+          if (add) {
+            const w = add.getAttribute('data-sched-kw-add');
+            if (ta.value.split('\n').indexOf(w) < 0) ta.value = ta.value.replace(/\s*$/, '') + '\n' + w;
+            return;
+          }
+          if (e.target.closest('[data-sched-kw-reset]')) { ta.value = SCHEDULE_DEFAULT_KW.join('\n'); return; }
+          if (e.target.closest('[data-sched-kw-save]')) {
+            state.schedule.keywords = ta.value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+            saveSchedule().then(function () {
+              UI.closeDrawer();
+              render('schedule');
+              UI.toast('关键词已保存', 'ok');
+            });
+          }
+        };
+      });
+  }
+
+  async function openScheduleWeekEditor() {
+    UI.openDrawer('第几周',
+      '<p class="drawer-hint">手动填写当前教学周，会放大显示在课表顶部。</p>' +
+      '<input class="input" id="schedWeekInput" type="number" min="1" max="60" value="' + esc(String(state.schedule.week || 1)) + '">' +
+      '<div class="drawer-foot"><button class="btn primary" data-sched-week-save type="button">保存</button></div>',
+      function (body) {
+        body.onclick = function (e) {
+          if (!e.target.closest('[data-sched-week-save]')) return;
+          const v = parseInt(body.querySelector('#schedWeekInput').value, 10);
+          state.schedule.week = (v > 0 && v <= 60) ? v : 1;
+          saveSchedule().then(function () { UI.closeDrawer(); render('schedule'); });
+        };
+      });
+  }
+
+  async function openScheduleCourseEdit(dayIdx) {
+    const sc = state.schedule;
+    const docs = scheduleSelectedDocs();
+    const auto = extractCourses(docs, sc.keywords, dayIdx);
+    const saved = (sc.courses || {})[dayIdx];
+    const list = (saved && saved.length ? saved : auto).map(function (c) {
+      return { period: c.period, name: c.name, room: c.room };
+    });
+
+    function rowHtml(c) {
+      return '<div class="sc-edit-row">' +
+        '<input class="input sc-ed-p" value="' + esc(String(c.period)) + '" aria-label="第几节" placeholder="节次">' +
+        '<input class="input sc-ed-n" value="' + esc(String(c.name)) + '" aria-label="课程" placeholder="课程">' +
+        '<input class="input sc-ed-r" value="' + esc(String(c.room)) + '" aria-label="教室" placeholder="教室">' +
+        '<button class="icon-btn sm" data-sc-del type="button" aria-label="删除">' + UI.icon('trash') + '</button>' +
+        '</div>';
+    }
+
+    UI.openDrawer(SCHEDULE_DAYS[dayIdx] + ' · 编辑课程',
+      '<p class="drawer-hint">三列依次是节次、课程、教室。改完保存后这一天的课表按手填内容显示。</p>' +
+      '<div id="scEditRows">' + list.map(rowHtml).join('') + '</div>' +
+      '<button class="btn block" data-sc-add type="button">' + UI.icon('plus') + '加一节课</button>' +
+      '<div class="drawer-foot"><button class="btn" data-sc-from-auto type="button">重新提取</button>' +
+      '<button class="btn primary" data-sc-save type="button">保存</button></div>',
+      function (body) {
+        const wrap = body.querySelector('#scEditRows');
+        body.onclick = function (e) {
+          if (e.target.closest('[data-sc-del]')) { const r = e.target.closest('.sc-edit-row'); if (r) r.remove(); return; }
+          if (e.target.closest('[data-sc-add]')) { wrap.insertAdjacentHTML('beforeend', rowHtml({ period: '', name: '', room: '' })); return; }
+          if (e.target.closest('[data-sc-from-auto]')) { wrap.innerHTML = auto.map(rowHtml).join(''); return; }
+          if (e.target.closest('[data-sc-save]')) {
+            const rows = UI.$$('.sc-edit-row', wrap).map(function (r) {
+              return {
+                period: r.querySelector('.sc-ed-p').value.trim() || '—',
+                name: r.querySelector('.sc-ed-n').value.trim() || '未命名课程',
+                room: r.querySelector('.sc-ed-r').value.trim() || '未标注教室'
+              };
+            });
+            sc.courses = sc.courses || {};
+            sc.courses[dayIdx] = rows;
+            sc.useAuto = false;
+            saveSchedule().then(function () { UI.closeDrawer(); render('schedule'); UI.toast('今日课程已保存', 'ok'); });
+          }
+        };
+      });
   }
 
   /* ---------- 统计 ---------- */
@@ -2901,6 +3255,7 @@
     if (!section) return;
 
     if (state.tab === 'home') section.innerHTML = await homeHtml(DB.todayISO());
+    else if (state.tab === 'schedule') section.innerHTML = scheduleHtml(DB.todayISO());
     else if (state.tab === 'archive') section.innerHTML = archiveHtml();
     else if (state.tab === 'records') section.innerHTML = recordsHtml();
     else if (state.tab === 'stats') section.innerHTML = statsHtml();
@@ -2921,6 +3276,38 @@
       const navBtn = e.target.closest('[data-nav]');
       if (navBtn) {
         window.App.switchTab(navBtn.getAttribute('data-nav'), true);
+        return;
+      }
+
+      /* 课表栏目 */
+      if (e.target.closest('[data-sched-docs]')) { await openScheduleDocPicker(); return; }
+      if (e.target.closest('[data-sched-kw]')) { await openScheduleKeywordEditor(); return; }
+      if (e.target.closest('[data-sched-week]')) { await openScheduleWeekEditor(); return; }
+      if (e.target.closest('[data-sched-edit]')) { await openScheduleCourseEdit(weekdayIndex(DB.todayISO())); return; }
+      if (e.target.closest('[data-sched-mode]')) {
+        const sc = state.schedule;
+        const idx = weekdayIndex(DB.todayISO());
+        if (sc.useAuto) {
+          sc.courses = sc.courses || {};
+          sc.courses[idx] = extractCourses(scheduleSelectedDocs(), sc.keywords, idx);
+        }
+        sc.useAuto = !sc.useAuto;
+        await saveSchedule();
+        await render('schedule');
+        return;
+      }
+      const zoomBtn = e.target.closest('[data-sched-zoom]');
+      if (zoomBtn) {
+        const doc = await DB.getDocument(parseInt(zoomBtn.getAttribute('data-sched-zoom'), 10));
+        if (doc && doc.blob) Viewer.open(doc);
+        else UI.toast('这份文件没有可预览的内容');
+        return;
+      }
+      const schedPick = e.target.closest('[data-sched-pick]');
+      if (schedPick) {
+        state.schedule.previewId = parseInt(schedPick.getAttribute('data-sched-pick'), 10);
+        await saveSchedule();
+        await render('schedule');
         return;
       }
 
@@ -3449,6 +3836,7 @@
         });
       }
     }
+    if (tab === 'schedule') mountSchedulePreview(section);
   }
 
   async function refresh() {
