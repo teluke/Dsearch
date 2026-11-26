@@ -3206,3 +3206,13 @@ html, body {
   box-shadow: inset 0 0 0 1px rgba(108,139,245,.22);
 }
 .sc-field.marked em { color: var(--primary); }
+
+/* v2.21.0 课表：选中关键词高亮，今日课程按该关键词筛选 */
+.sched-kwline .kw-chip[data-sched-kw-pick] { cursor: pointer; }
+.sched-kwline .kw-chip.on {
+  color: #fff;
+  background: var(--primary-2);
+  border-color: transparent;
+  box-shadow: 0 3px 10px rgba(108, 139, 245, .25);
+}
+.sched-kwline .kw-chip.on:hover { filter: brightness(1.03); }

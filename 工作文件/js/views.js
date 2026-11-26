@@ -13,7 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {} },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeyword: '' },
     memoEditId: null,
     docs: [],
     series: [],
@@ -53,6 +53,7 @@
       sc.previewId = (await DB.getSetting('schedulePreviewId', null)) || null;
       sc.seriesName = (await DB.getSetting('scheduleSeriesName', '课表')) || '课表';
       sc.fieldKeywords = Object.assign(defaultFieldKeywords(), (await DB.getSetting('scheduleFieldKeywords', {})) || {});
+      sc.activeKeyword = (await DB.getSetting('scheduleActiveKeyword', '')) || '';
       /* 只保留当前课表系列里的文件；没有勾过就默认取最新一份 */
       const allowed = scheduleSeriesDocs();
       const kept = (sc.docIds || []).filter(function (id) {
@@ -73,6 +74,7 @@
     await DB.setSetting('schedulePreviewId', sc.previewId);
     await DB.setSetting('scheduleSeriesName', sc.seriesName);
     await DB.setSetting('scheduleFieldKeywords', sc.fieldKeywords || defaultFieldKeywords());
+    await DB.setSetting('scheduleActiveKeyword', sc.activeKeyword || '');
   }
 
   async function saveEventOverrides() {
@@ -1403,6 +1405,20 @@
         }
         if (!name && !room && !className) return;
         const rowFields = classifiedRowFields(rawCells, headCells, picked, kwMap);
+        /* 逐关键词记录这一行是否命中：表头型关键词看该列是否有值，
+           值型关键词看该列值是否包含它；没有表头时退回行内文字匹配。 */
+        const hits = kws.filter(function (k) {
+          const w = String(k || '').trim();
+          if (!w || isSchedulePrivateToken(w)) return false;
+          const col = kwMap[w];
+          if (col != null) {
+            const v = cleanDisplayCell(rawCells[col]);
+            if (!v || isSchedulePrivateToken(v)) return false;
+            const byHeader = headCells && columnByChoice(headCells, w) >= 0;
+            return byHeader ? true : v.indexOf(w) >= 0;
+          }
+          return s.indexOf(w) >= 0;
+        });
         out.push({
           period: period || formatPeriods(headerPeriod) || '—',
           name: name || '未命名课程',
@@ -1410,6 +1426,7 @@
           className: className,
           teacher: teacher,
           fields: rowFields,
+          hits: hits,
           docId: d.id
         });
       });
@@ -1436,6 +1453,29 @@
       }).join('') + '</div>';
   }
 
+  /* 当前选中的关键词：没选或关键词被删掉时回落到第一个 */
+  function currentScheduleKeyword() {
+    const list = (state.schedule.keywords || []).filter(function (k) { return !!String(k || '').trim(); });
+    const active = String(state.schedule.activeKeyword || '').trim();
+    if (active && list.indexOf(active) >= 0) return active;
+    return list[0] || '';
+  }
+
+  /* 一节课是否属于某个关键词：优先用提取时记录的命中列表，
+     手动编辑的历史数据则在字段和显示值里兜底匹配。 */
+  function courseMatchesKeyword(c, kw) {
+    const w = String(kw || '').trim();
+    if (!w) return true;
+    if (c.hits && c.hits.length) return c.hits.indexOf(w) >= 0;
+    const fields = (c.fields && c.fields.length) ? c.fields : fallbackFields(c);
+    const inFields = fields.some(function (f) {
+      return String(f.label || '').indexOf(w) >= 0 || String(f.value || '').indexOf(w) >= 0;
+    });
+    if (inFields) return true;
+    return [c.name, c.room, c.className, c.teacher, c.period]
+      .some(function (v) { return String(v || '').indexOf(w) >= 0; });
+  }
+
   function scheduleHtml(todayStr) {
     const sc = state.schedule;
     const docs = scheduleSelectedDocs();
@@ -1443,7 +1483,9 @@
     const dt = new Date(todayStr + 'T00:00:00');
     const md = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
     const auto = extractCourses(docs, sc.keywords, dayIdx, sc.fieldKeywords);
-    const courses = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
+    const allCourses = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
+    const activeKw = currentScheduleKeyword();
+    const courses = activeKw ? allCourses.filter(function (c) { return courseMatchesKeyword(c, activeKw); }) : allCourses;
     const week = (sc.week == null || sc.week === '') ? 1 : sc.week;
 
     const courseHtml = courses.length
@@ -1474,7 +1516,9 @@
             '<span class="sc-no">' + (i + 1) + '</span>' +
             '</div>';
         }).join('')
-      : emptyBlock('今天没有识别到课程', docs.length ? '点「编辑课程」手动填写，或检查关键词设置' : '先点右上角文件图标加入课表文件');
+      : emptyBlock('今天没有识别到相关课程', docs.length
+        ? (activeKw ? '关键词「' + activeKw + '」在这一天没有命中课程，换个关键词试试' : '点「编辑课程」手动填写，或检查关键词设置')
+        : '先点右上角文件图标加入课表文件');
 
     return '<div class="topbar"><div>' +
       '<p class="meta">今日课表 · ' + esc(todayStr) + '</p>' +
@@ -1491,11 +1535,17 @@
       '</div>' +
       '<div class="sched-kwline">' +
       (sc.keywords || []).slice(0, 14).map(function (k) {
-        return '<button class="kw-chip" data-sched-kw type="button">' + esc(String(k)) + '</button>';
+        return '<button class="kw-chip' + (k === activeKw ? ' on' : '') + '" data-sched-kw-pick="' +
+          esc(String(k)) + '" type="button" aria-pressed="' + (k === activeKw ? 'true' : 'false') + '">' +
+          esc(String(k)) + '</button>';
       }).join('') +
       '<button class="kw-chip add" data-sched-kw type="button">＋ 编辑关键词</button>' +
       '</div>' +
-      '<div class="section-title"><span>今日课程</span><span class="count">' + courses.length + ' 节 · ' + (sc.useAuto ? '自动提取' : '手动编辑') + '</span></div>' +
+      '<div class="section-title"><span>今日课程</span><span class="title-side">' +
+      '<span class="count">' + courses.length + ' 节 · ' +
+      (activeKw ? '关键词「' + esc(activeKw) + '」' : (sc.useAuto ? '自动提取' : '手动编辑')) + '</span>' +
+      (activeKw ? '<button class="section-link" data-sched-kw-rows type="button" title="查看这个关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
+      '</span></div>' +
       '<div class="sched-list">' + courseHtml + '</div>' +
       '<div class="sched-actions">' +
       '<button class="btn" data-sched-edit type="button">' + UI.icon('edit') + '编辑课程</button>' +
@@ -1675,7 +1725,9 @@
           }
           if (e.target.closest('[data-sched-kw-reset]')) { ta.value = SCHEDULE_DEFAULT_KW.join('\n'); return; }
           if (e.target.closest('[data-sched-kw-save]')) {
-            state.schedule.keywords = ta.value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+            const sc = state.schedule;
+            sc.keywords = ta.value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+            if (sc.keywords.indexOf(sc.activeKeyword) < 0) sc.activeKeyword = sc.keywords[0] || '';
             saveSchedule().then(function () {
               UI.closeDrawer();
               render('schedule');
@@ -3898,8 +3950,18 @@
 
       /* 课表栏目 */
       if (e.target.closest('[data-sched-docs]')) { await openScheduleDocPicker(); return; }
-      const schedKwChip = e.target.closest('.sched-kwline .kw-chip:not(.add)');
-      if (schedKwChip) { await openScheduleKeywordRows(schedKwChip.textContent.trim()); return; }
+      if (e.target.closest('[data-sched-kw-rows]')) {
+        await openScheduleKeywordRows(currentScheduleKeyword());
+        return;
+      }
+      const schedKwPick = e.target.closest('[data-sched-kw-pick]');
+      if (schedKwPick) {
+        const sc = state.schedule;
+        sc.activeKeyword = schedKwPick.getAttribute('data-sched-kw-pick') || '';
+        await saveSchedule();
+        await render('schedule');
+        return;
+      }
       if (e.target.closest('[data-sched-kw]')) { await openScheduleKeywordEditor(); return; }
       if (e.target.closest('[data-sched-week]')) { await openScheduleWeekEditor(); return; }
       if (e.target.closest('[data-sched-edit]')) { await openScheduleCourseEdit(weekdayIndex(DB.todayISO())); return; }
