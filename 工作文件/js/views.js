@@ -1016,6 +1016,54 @@
     return String(numFromCn(raw));
   }
 
+  /* 表格文件导出成 CSV（逗号分隔）。找到表头行后按列名取单元格，比按位置猜稳。 */
+  function splitScheduleCells(line) {
+    const s = String(line || '').trim();
+    if (!s) return [];
+    if (s.indexOf('\t') >= 0) return s.split(/\t+/).map(function (x) { return x.trim(); });
+    if (s.indexOf(',') >= 0) return s.split(',').map(function (x) {
+      return String(x).replace(/^["'\s]+|["'\s]+$/g, '').trim();
+    });
+    return s.split(/\s+/).map(function (x) { return x.trim(); });
+  }
+
+  function headerColumn(cells, words) {
+    for (let i = 0; i < cells.length; i++) {
+      const t = String(cells[i] || '').replace(/\s/g, '');
+      for (let j = 0; j < words.length; j++) {
+        if (t === words[j] || (words[j].length >= 4 && t.indexOf(words[j]) >= 0)) return i;
+      }
+    }
+    return -1;
+  }
+
+  /* 返回 { row, period, name, room, className, teacher }：各栏目所在的列号。
+     只有整行像表头（含独立的「授课教师」单元格、且没有星期/节次数据）才认。 */
+  function scheduleHeaderMap(lines) {
+    const weekRe = /周[一二三四五六日天]|星期[一二三四五六日天]/;
+    const periodRe = /第\s*[一二三四五六七八九十\d]+\s*节|\d+\s*节/;
+    for (let i = 0; i < lines.length && i < 20; i++) {
+      const cells = splitScheduleCells(lines[i]);
+      if (cells.length < 2) continue;
+      const row = cells.join(' ');
+      if (weekRe.test(row) || periodRe.test(row)) continue;
+      const teacher = headerColumn(cells, ['授课教师', '任课教师', '教师', '老师']);
+      if (teacher < 0) continue;
+      const map = {
+        row: i,
+        teacher: teacher,
+        name: headerColumn(cells, ['课程名称', '课程', '课名', '科目']),
+        room: headerColumn(cells, ['上课地点', '教室', '地点', '教学楼']),
+        className: headerColumn(cells, ['上课班级', '班级', '教学班']),
+        period: headerColumn(cells, ['节次', '课时'])
+      };
+      if (map.name < 0 && map.room < 0 && map.className < 0 && map.period < 0) continue;
+      return map;
+    }
+    return null;
+  }
+
+  /* cleanCell 复用隐私过滤，单元格里出现工号/学号这类值直接当空 */
   function extractCourses(docs, keywords, dayIdx) {
     const out = [];
     const dayA = SCHEDULE_DAYS[dayIdx];
@@ -1027,12 +1075,19 @@
     const roomWordRe = /(?:教室|教学楼|实验楼|实训室|会议室|报告厅|操场|图书馆|体育馆|活动室|楼|馆|厅|室)/;
     const classRe = /[\u4e00-\u9fa5A-Za-z0-9]{1,10}班\d{0,3}/;
     const anyDayRe = /周[一二三四五六日天]|星期[一二三四五六日天]/;
-    const teacherKw = kws.some(function (k) { return /^(授课教师|教师|老师|任课教师)$/.test(String(k || '').trim()); });
+    const teacherLabelRe = /^(?:授课教师|任课教师|教师|老师)\s*[:：]?\s*(.*)$/;
+    const cleanCell = function (x) {
+      return String(x || '').replace(periodRe, '').replace(compactPeriodRe, '')
+        .replace(anyDayRe, '').trim();
+    };
 
     docs.forEach(function (d) {
       const text = scheduleTextOf(d);
       if (!text) return;
-      text.split(/\r?\n/).forEach(function (line) {
+      const lines = text.split(/\r?\n/);
+      const header = scheduleHeaderMap(lines);
+      lines.forEach(function (line, lineIdx) {
+        if (header && lineIdx === header.row) return;
         const s = line.trim();
         if (!s || s.length > 300) return;
         const dayHit = s.indexOf(dayA) >= 0 || s.indexOf(dayB) >= 0;
@@ -1044,14 +1099,26 @@
         const hit = period || kws.some(function (k) { return k && s.indexOf(k) >= 0; });
         if (!hit) return;
 
-        /* 表格行按单元格切；没有制表符时退回按空格切 */
-        let cells = s.indexOf('\t') >= 0 ? s.split(/\t+/) : s.split(/\s+/);
-        cells = cells.map(function (x) { return String(x).trim(); })
+        let cells = splitScheduleCells(s);
+        /* 有表头就按列取栏目，取不到的列留空由后面的正则兜底 */
+        let headerTeacher = '';
+        let headerName = '';
+        let headerRoom = '';
+        let headerClass = '';
+        let headerPeriod = '';
+        if (header) {
+          headerTeacher = header.teacher >= 0 ? cleanCell(cells[header.teacher]) : '';
+          headerName = header.name >= 0 ? cleanCell(cells[header.name]) : '';
+          headerRoom = header.room >= 0 ? cleanCell(cells[header.room]) : '';
+          headerClass = header.className >= 0 ? cleanCell(cells[header.className]) : '';
+          headerPeriod = header.period >= 0 ? cleanCell(cells[header.period]) : '';
+        }
+
+        cells = cells.map(cleanCell)
           .filter(function (x) { return x && !isSchedulePrivateToken(x); })
-          .map(function (x) { return x.replace(periodRe, '').replace(compactPeriodRe, '').replace(anyDayRe, '').trim(); })
           .filter(Boolean);
 
-        let room = '';
+        let room = headerRoom && !isSchedulePrivateToken(headerRoom) ? headerRoom : '';
         let roomIdx = -1;
         cells.forEach(function (c, i) {
           if (!roomWordRe.test(c)) return;
@@ -1063,16 +1130,19 @@
           if (rm) room = rm[1];
         }
 
-        let className = '';
-        for (let i = 0; i < cells.length; i++) {
-          const m = cells[i].match(classRe);
-          if (m) { className = m[0]; cells.splice(i, 1); break; }
+        let className = headerClass && !isSchedulePrivateToken(headerClass) ? headerClass : '';
+        if (!className) {
+          for (let i = 0; i < cells.length; i++) {
+            const m = cells[i].match(classRe);
+            if (m) { className = m[0]; cells.splice(i, 1); break; }
+          }
         }
 
-        let teacher = '';
-        if (teacherKw) {
+        /* 教师：表头列优先；没有表头时认行内「授课教师：姓名」或关键词触发 */
+        let teacher = headerTeacher && !isSchedulePrivateToken(headerTeacher) ? headerTeacher : '';
+        if (!teacher) {
           for (let i = 0; i < cells.length; i++) {
-            const m = cells[i].match(/^(?:授课教师|任课教师|教师|老师)\s*[:：]?\s*(.*)$/);
+            const m = cells[i].match(teacherLabelRe);
             if (!m) continue;
             teacher = m[1] || cells[i + 1] || '';
             cells.splice(i, m[1] ? 1 : 2);
@@ -1081,16 +1151,20 @@
           }
         }
 
-        let name = '';
-        cells.forEach(function (c) {
-          if (!/[\u4e00-\u9fa5]/.test(c)) return;
-          const v = c.replace(/^[在:：\s\-—·、,，]+|[在:：\s\-—·、,，]+$/g, '').trim();
-          if (v.length > name.length) name = v;
-        });
-        if (!name && room) name = '';
+        let name = headerName && !isSchedulePrivateToken(headerName) ? headerName : '';
+        if (!name && headerTeacher && teacher) {
+          cells = cells.filter(function (c) { return c !== teacher; });
+        }
+        if (!name) {
+          cells.forEach(function (c) {
+            if (!/[\u4e00-\u9fa5]/.test(c)) return;
+            const v = c.replace(/^[在:：\s\-—·、,，]+|[在:：\s\-—·、,，]+$/g, '').trim();
+            if (v.length > name.length) name = v;
+          });
+        }
         if (!name && !room && !className) return;
         out.push({
-          period: period || '—',
+          period: period || formatPeriods(headerPeriod) || '—',
           name: name || '未命名课程',
           room: room || '未标注教室',
           className: className,
@@ -1137,8 +1211,8 @@
             '<span class="sc-period">' + (/^\d/.test(String(c.period)) ? '第 ' + esc(String(c.period)) + ' 节' : esc(String(c.period))) + '</span>' +
             '<span class="sc-main"><b>' + esc(String(c.name)) + '</b>' +
             '<span class="sc-room">' + UI.icon('folder') + esc(String(c.room)) +
-            (c.className ? ' · ' + esc(String(c.className)) : '') + '</span>' +
-            (c.teacher ? '<span class="sc-teacher">授课教师 · ' + esc(String(c.teacher)) + '</span>' : '') +
+            (c.className ? ' · ' + esc(String(c.className)) : '') +
+            (c.teacher ? ' · ' + esc(String(c.teacher)) : '') + '</span>' +
             '</span>' +
             '<span class="sc-no">' + (i + 1) + '</span>' +
             '</div>';
