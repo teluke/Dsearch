@@ -13,7 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表' },
     memoEditId: null,
     docs: [],
     series: [],
@@ -46,6 +46,14 @@
       sc.courses = (await DB.getSetting('scheduleCourses', {})) || {};
       sc.useAuto = (await DB.getSetting('scheduleUseAuto', true)) !== false;
       sc.previewId = (await DB.getSetting('schedulePreviewId', null)) || null;
+      sc.seriesName = (await DB.getSetting('scheduleSeriesName', '课表')) || '课表';
+      /* 只保留当前课表系列里的文件；没有勾过就默认取最新一份 */
+      const allowed = scheduleSeriesDocs();
+      const kept = (sc.docIds || []).filter(function (id) {
+        return allowed.some(function (d) { return d.id === id; });
+      });
+      sc.docIds = kept.length ? kept : (allowed.length ? [allowed[0].id] : []);
+      if (sc.docIds.indexOf(sc.previewId) < 0) sc.previewId = sc.docIds[0] || null;
     } catch (e) { /* 课表设置损坏时用默认值 */ }
   }
 
@@ -57,6 +65,7 @@
     await DB.setSetting('scheduleCourses', sc.courses);
     await DB.setSetting('scheduleUseAuto', sc.useAuto);
     await DB.setSetting('schedulePreviewId', sc.previewId);
+    await DB.setSetting('scheduleSeriesName', sc.seriesName);
   }
 
   function folderById(id) {
@@ -967,13 +976,44 @@
     return null;
   }
 
+  /* 课表来源只认当前系列（默认「课表」，名字可改） */
+  function scheduleSeriesDocs() {
+    const name = String(state.schedule.seriesName || '课表').trim();
+    return state.docs.filter(function (d) { return seriesName(d.seriesId) === name; })
+      .sort(function (a, b) { return String(b.archiveDate || '').localeCompare(String(a.archiveDate || '')); });
+  }
+
   function scheduleSelectedDocs() {
-    const ids = state.schedule.docIds || [];
-    return ids.map(scheduleDocById).filter(Boolean);
+    const allowed = scheduleSeriesDocs();
+    const ids = {};
+    allowed.forEach(function (d) { ids[d.id] = true; });
+    return (state.schedule.docIds || []).map(scheduleDocById).filter(function (d) {
+      return d && ids[d.id];
+    });
   }
 
   function scheduleTextOf(d) {
     return [d.fullText, d.ocrText, d.note].filter(Boolean).join('\n');
+  }
+
+  /* 工号、学号、电话、邮箱等不进课表，避免把隐私信息显示或保存下来 */
+  function isSchedulePrivateToken(t) {
+    const s = String(t || '').trim();
+    return /^[A-Za-z]\d{6,}$/.test(s) || /^\d{6,}$/.test(s) ||
+      /^1\d{10}$/.test(s) || s.indexOf('@') >= 0;
+  }
+
+  function formatPeriods(s) {
+    const raw = String(s || '').trim();
+    if (!raw) return '';
+    if (/^\d+$/.test(raw)) {
+      return raw.length === 1 ? raw : raw.charAt(0) + '-' + raw.charAt(raw.length - 1);
+    }
+    if (/^[一二三四五六七八九十]+$/.test(raw)) {
+      const nums = raw.split('').map(numFromCn).map(Number);
+      return nums.length === 1 ? String(nums[0]) : String(nums[0]) + '-' + String(nums[nums.length - 1]);
+    }
+    return String(numFromCn(raw));
   }
 
   function extractCourses(docs, keywords, dayIdx) {
@@ -982,47 +1022,79 @@
     const dayB = SCHEDULE_DAYS_CN[dayIdx];
     const kws = (keywords && keywords.length) ? keywords : SCHEDULE_DEFAULT_KW;
     const periodRe = /第\s*([一二三四五六七八九十\d]+)\s*节/;
-    const roomRe = /([\u4e00-\u9fa5A-Za-z0-9]{1,10}(?:教室|教学楼|实验楼|实训室|会议室|报告厅|操场|图书馆|体育馆|活动室|楼)\d{0,4}[\u4e00-\u9fa5A-Za-z0-9]{0,6})/;
-    const roomWordRe = /(?:教室|教学楼|实验楼|实训室|会议室|报告厅|操场|图书馆|体育馆|活动室|楼|馆|厅)/;
+    const compactPeriodRe = /(?:周[一二三四五六日天]|星期[一二三四五六日天])\s*([0-9一二三四五六七八九十]{1,4})\s*节/;
+    const roomRe = /([\u4e00-\u9fa5A-Za-z0-9]{1,10}(?:教室|教学楼|实验楼|实训室|会议室|报告厅|操场|图书馆|体育馆|活动室|楼|馆|厅|室)\d{0,4}[\u4e00-\u9fa5A-Za-z0-9]{0,6})/;
+    const roomWordRe = /(?:教室|教学楼|实验楼|实训室|会议室|报告厅|操场|图书馆|体育馆|活动室|楼|馆|厅|室)/;
+    const classRe = /[\u4e00-\u9fa5A-Za-z0-9]{1,10}班\d{0,3}/;
     const anyDayRe = /周[一二三四五六日天]|星期[一二三四五六日天]/;
+    const teacherKw = kws.some(function (k) { return /^(授课教师|教师|老师|任课教师)$/.test(String(k || '').trim()); });
 
     docs.forEach(function (d) {
       const text = scheduleTextOf(d);
       if (!text) return;
       text.split(/\r?\n/).forEach(function (line) {
         const s = line.trim();
-        if (!s || s.length > 200) return;
-        const hit = kws.some(function (k) { return k && s.indexOf(k) >= 0; });
-        if (!hit) return;
+        if (!s || s.length > 300) return;
         const dayHit = s.indexOf(dayA) >= 0 || s.indexOf(dayB) >= 0;
         if (!dayHit && anyDayRe.test(s)) return;
+
         const pm = s.match(periodRe);
-        const period = pm ? numFromCn(pm[1]) : '';
-        const rest = s.replace(periodRe, '').replace(anyDayRe, '').trim();
-        const parts = rest.split(/\s+/).filter(Boolean);
+        const cm = pm ? null : s.match(compactPeriodRe);
+        const period = formatPeriods(pm ? pm[1] : (cm ? cm[1] : ''));
+        const hit = period || kws.some(function (k) { return k && s.indexOf(k) >= 0; });
+        if (!hit) return;
+
+        /* 表格行按单元格切；没有制表符时退回按空格切 */
+        let cells = s.indexOf('\t') >= 0 ? s.split(/\t+/) : s.split(/\s+/);
+        cells = cells.map(function (x) { return String(x).trim(); })
+          .filter(function (x) { return x && !isSchedulePrivateToken(x); })
+          .map(function (x) { return x.replace(periodRe, '').replace(compactPeriodRe, '').replace(anyDayRe, '').trim(); })
+          .filter(Boolean);
+
         let room = '';
-        const nameParts = parts.slice();
-        for (let i = 0; i < parts.length; i++) {
-          if (roomWordRe.test(parts[i])) {
-            room = parts[i];
-            nameParts.splice(i, 1);
+        let roomIdx = -1;
+        cells.forEach(function (c, i) {
+          if (!roomWordRe.test(c)) return;
+          if (!room || (/\d/.test(c) && !/\d/.test(room))) { room = c; roomIdx = i; }
+        });
+        if (roomIdx >= 0) cells.splice(roomIdx, 1);
+        if (!room) {
+          const rm = s.match(roomRe);
+          if (rm) room = rm[1];
+        }
+
+        let className = '';
+        for (let i = 0; i < cells.length; i++) {
+          const m = cells[i].match(classRe);
+          if (m) { className = m[0]; cells.splice(i, 1); break; }
+        }
+
+        let teacher = '';
+        if (teacherKw) {
+          for (let i = 0; i < cells.length; i++) {
+            const m = cells[i].match(/^(?:授课教师|任课教师|教师|老师)\s*[:：]?\s*(.*)$/);
+            if (!m) continue;
+            teacher = m[1] || cells[i + 1] || '';
+            cells.splice(i, m[1] ? 1 : 2);
+            if (isSchedulePrivateToken(teacher) || /^(?:授课教师|任课教师|教师|老师)$/.test(teacher)) teacher = '';
             break;
           }
         }
-        if (!room) {
-          const rm = rest.match(roomRe);
-          if (rm) {
-            room = rm[1];
-            nameParts.length = 0;
-            nameParts.push(rest.replace(room, '').trim());
-          }
-        }
-        const name = nameParts.join(' ').replace(/^[在:：\s\-—·、,，]+|[在:：\s\-—·、,，]+$/g, '').trim();
-        if (!name && !room) return;
+
+        let name = '';
+        cells.forEach(function (c) {
+          if (!/[\u4e00-\u9fa5]/.test(c)) return;
+          const v = c.replace(/^[在:：\s\-—·、,，]+|[在:：\s\-—·、,，]+$/g, '').trim();
+          if (v.length > name.length) name = v;
+        });
+        if (!name && room) name = '';
+        if (!name && !room && !className) return;
         out.push({
           period: period || '—',
           name: name || '未命名课程',
           room: room || '未标注教室',
+          className: className,
+          teacher: teacher,
           docId: d.id
         });
       });
@@ -1030,9 +1102,10 @@
     return out.slice(0, 12);
   }
 
-  function scheduleFilePreviewHtml(docs, previewId) {
+  function scheduleFilePreviewHtml(docs, previewId, seriesNameText) {
     if (!docs.length) {
-      return emptyBlock('还没有课表文件', '点右上角的文件图标，把课表文件选进来');
+      return emptyBlock('「' + esc(seriesNameText || '课表') + '」系列里还没有文件',
+        '点右上角的文件图标，可修改系列名或勾选该系列里的文件');
     }
     const d = scheduleDocById(previewId) || docs[0];
     const kind = Parser.kindOf(d.name);
@@ -1061,9 +1134,12 @@
     const courseHtml = courses.length
       ? courses.map(function (c, i) {
           return '<div class="sched-course neu">' +
-            '<span class="sc-period">第 ' + esc(String(c.period)) + ' 节</span>' +
+            '<span class="sc-period">' + (/^\d/.test(String(c.period)) ? '第 ' + esc(String(c.period)) + ' 节' : esc(String(c.period))) + '</span>' +
             '<span class="sc-main"><b>' + esc(String(c.name)) + '</b>' +
-            '<span class="sc-room">' + UI.icon('folder') + esc(String(c.room)) + '</span></span>' +
+            '<span class="sc-room">' + UI.icon('folder') + esc(String(c.room)) +
+            (c.className ? ' · ' + esc(String(c.className)) : '') + '</span>' +
+            (c.teacher ? '<span class="sc-teacher">授课教师 · ' + esc(String(c.teacher)) + '</span>' : '') +
+            '</span>' +
             '<span class="sc-no">' + (i + 1) + '</span>' +
             '</div>';
         }).join('')
@@ -1094,8 +1170,8 @@
       '<button class="btn" data-sched-edit type="button">' + UI.icon('edit') + '编辑课程</button>' +
       '<button class="btn' + (sc.useAuto ? '' : ' primary') + '" data-sched-mode type="button">' + (sc.useAuto ? '切换到手动编辑' : '直接使用提取结果') + '</button>' +
       '</div>' +
-      '<div class="section-title"><span>原文件放大</span><span class="count">' + docs.length + ' 份</span></div>' +
-      scheduleFilePreviewHtml(docs, sc.previewId);
+      '<div class="section-title"><span>原文件放大</span><span class="count">' + esc(sc.seriesName) + ' 系列 · ' + docs.length + ' 份</span></div>' +
+      scheduleFilePreviewHtml(docs, sc.previewId, sc.seriesName);
   }
 
   async function mountSchedulePreview(section) {
@@ -1136,28 +1212,46 @@
   }
 
   async function openScheduleDocPicker() {
-    const picked = (state.schedule.docIds || []).map(String);
-    const list = state.docs.map(function (d) {
-      const kind = Parser.kindOf(d.name);
-      return '<label class="pick-row neu"><input type="checkbox" value="' + d.id + '"' + (picked.indexOf(String(d.id)) >= 0 ? ' checked' : '') + '>' +
-        '<span class="icon-box ' + kind + '">' + UI.icon(UI.kindIcon(kind)) + '</span>' +
-        '<span class="pr-main"><b>' + esc(d.name) + '</b><small>' + esc(d.archiveDate || '') + ' · ' + esc(UI.fmtSize(d.size || 0)) + '</small></span></label>';
-    }).join('');
+    function listHtml(name) {
+      const allowed = state.docs.filter(function (d) { return seriesName(d.seriesId) === name; })
+        .sort(function (a, b) { return String(b.archiveDate || '').localeCompare(String(a.archiveDate || '')); });
+      if (!allowed.length) {
+        return emptyBlock('「' + esc(name) + '」系列里还没有文件', '改系列名，或先在归档里建一个同名系列');
+      }
+      const picked = (state.schedule.docIds || []).map(String);
+      return allowed.map(function (d) {
+        const kind = Parser.kindOf(d.name);
+        return '<label class="pick-row neu"><input type="checkbox" value="' + d.id + '"' + (picked.indexOf(String(d.id)) >= 0 ? ' checked' : '') + '>' +
+          '<span class="icon-box ' + kind + '">' + UI.icon(UI.kindIcon(kind)) + '</span>' +
+          '<span class="pr-main"><b>' + esc(d.name) + '</b><small>' + esc(d.archiveDate || '') + ' · ' + esc(UI.fmtSize(d.size || 0)) + '</small></span></label>';
+      }).join('');
+    }
 
     UI.openDrawer('选择课表文件',
-      '<p class="drawer-hint">勾选要放进课表的文件。正文里的课程和教室会按关键词提取。</p>' +
-      (list || emptyBlock('还没有文件', '先归档一份课表文件') ) +
+      '<p class="drawer-hint">这里只显示指定系列里的文件，系列名可以改。工号、电话等隐私字段不会参与提取。</p>' +
+      '<div class="sched-series-row"><input class="input" id="schedSeriesInput" value="' + esc(state.schedule.seriesName || '课表') + '" aria-label="课表系列名">' +
+      '<button class="btn" data-sched-series-apply type="button">应用</button></div>' +
+      '<div id="schedPickList">' + listHtml(state.schedule.seriesName || '课表') + '</div>' +
       '<div class="drawer-foot"><button class="btn" data-sched-pick-clear type="button">清空选择</button>' +
       '<button class="btn primary" data-sched-pick-save type="button">保存</button></div>',
       function (body) {
+        const input = body.querySelector('#schedSeriesInput');
+        const listWrap = body.querySelector('#schedPickList');
+        const current = function () { return (input.value || '').trim() || '课表'; };
         body.onclick = async function (e) {
+          if (e.target.closest('[data-sched-series-apply]')) {
+            listWrap.innerHTML = listHtml(current());
+            return;
+          }
           if (e.target.closest('[data-sched-pick-clear]')) {
-            UI.$$('input[type="checkbox"]', body).forEach(function (c) { c.checked = false; });
+            UI.$$('input[type="checkbox"]', listWrap).forEach(function (c) { c.checked = false; });
             return;
           }
           if (e.target.closest('[data-sched-pick-save]')) {
-            const ids = UI.$$('input[type="checkbox"]:checked', body).map(function (c) { return parseInt(c.value, 10); });
+            const ids = UI.$$('input[type="checkbox"]:checked', listWrap).map(function (c) { return parseInt(c.value, 10); });
+            state.schedule.seriesName = current();
             state.schedule.docIds = ids;
+            state.schedule.courses = {};
             if (ids.indexOf(state.schedule.previewId) < 0) state.schedule.previewId = ids[0] || null;
             await saveSchedule();
             UI.closeDrawer();
@@ -1171,9 +1265,10 @@
   async function openScheduleKeywordEditor() {
     const words = (state.schedule.keywords && state.schedule.keywords.length)
       ? state.schedule.keywords.slice() : SCHEDULE_DEFAULT_KW.slice();
-    const candidates = Keywords.collect(scheduleSelectedDocs(), 24) || [];
+    const candidates = (Keywords.collect(scheduleSelectedDocs(), 24) || [])
+      .filter(function (c) { return !isSchedulePrivateToken(c.word); });
     UI.openDrawer('提取关键词',
-      '<p class="drawer-hint">一行一个。命中的文字行会被抓成课程；星期词用来判断当天。</p>' +
+      '<p class="drawer-hint">一行一个。命中行会抓成课程；想提取教师时加一行「授课教师」，工号、电话、邮箱会自动忽略。</p>' +
       '<textarea class="input" id="schedKwText" style="min-height:140px">' + esc(words.join('\n')) + '</textarea>' +
       (candidates.length
         ? '<div class="section-title"><span>从课表文件里挑</span></div><div class="kw-pick">' +
@@ -1226,20 +1321,25 @@
     const auto = extractCourses(docs, sc.keywords, dayIdx);
     const saved = (sc.courses || {})[dayIdx];
     const list = (saved && saved.length ? saved : auto).map(function (c) {
-      return { period: c.period, name: c.name, room: c.room };
+      return { period: c.period, name: c.name, room: c.room, className: c.className || '', teacher: c.teacher || '' };
     });
 
     function rowHtml(c) {
-      return '<div class="sc-edit-row">' +
+      return '<div class="sc-edit-card">' +
+        '<div class="sc-edit-row">' +
         '<input class="input sc-ed-p" value="' + esc(String(c.period)) + '" aria-label="第几节" placeholder="节次">' +
         '<input class="input sc-ed-n" value="' + esc(String(c.name)) + '" aria-label="课程" placeholder="课程">' +
         '<input class="input sc-ed-r" value="' + esc(String(c.room)) + '" aria-label="教室" placeholder="教室">' +
         '<button class="icon-btn sm" data-sc-del type="button" aria-label="删除">' + UI.icon('trash') + '</button>' +
-        '</div>';
+        '</div>' +
+        '<div class="sc-edit-extra">' +
+        '<input class="input sc-ed-c" value="' + esc(String(c.className || '')) + '" aria-label="班级" placeholder="班级（可选）">' +
+        '<input class="input sc-ed-t" value="' + esc(String(c.teacher || '')) + '" aria-label="授课教师" placeholder="授课教师（可选）">' +
+        '</div></div>';
     }
 
     UI.openDrawer(SCHEDULE_DAYS[dayIdx] + ' · 编辑课程',
-      '<p class="drawer-hint">三列依次是节次、课程、教室。改完保存后这一天的课表按手填内容显示。</p>' +
+      '<p class="drawer-hint">第一行是节次、课程、教室，第二行可填班级和授课教师。工号、电话等隐私字段不会提取。</p>' +
       '<div id="scEditRows">' + list.map(rowHtml).join('') + '</div>' +
       '<button class="btn block" data-sc-add type="button">' + UI.icon('plus') + '加一节课</button>' +
       '<div class="drawer-foot"><button class="btn" data-sc-from-auto type="button">重新提取</button>' +
@@ -1247,15 +1347,17 @@
       function (body) {
         const wrap = body.querySelector('#scEditRows');
         body.onclick = function (e) {
-          if (e.target.closest('[data-sc-del]')) { const r = e.target.closest('.sc-edit-row'); if (r) r.remove(); return; }
+          if (e.target.closest('[data-sc-del]')) { const r = e.target.closest('.sc-edit-card'); if (r) r.remove(); return; }
           if (e.target.closest('[data-sc-add]')) { wrap.insertAdjacentHTML('beforeend', rowHtml({ period: '', name: '', room: '' })); return; }
           if (e.target.closest('[data-sc-from-auto]')) { wrap.innerHTML = auto.map(rowHtml).join(''); return; }
           if (e.target.closest('[data-sc-save]')) {
-            const rows = UI.$$('.sc-edit-row', wrap).map(function (r) {
+            const rows = UI.$$('.sc-edit-card', wrap).map(function (r) {
               return {
                 period: r.querySelector('.sc-ed-p').value.trim() || '—',
                 name: r.querySelector('.sc-ed-n').value.trim() || '未命名课程',
-                room: r.querySelector('.sc-ed-r').value.trim() || '未标注教室'
+                room: r.querySelector('.sc-ed-r').value.trim() || '未标注教室',
+                className: (r.querySelector('.sc-ed-c') || {}).value ? r.querySelector('.sc-ed-c').value.trim() : '',
+                teacher: (r.querySelector('.sc-ed-t') || {}).value ? r.querySelector('.sc-ed-t').value.trim() : ''
               };
             });
             sc.courses = sc.courses || {};

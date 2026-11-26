@@ -3067,3 +3067,16 @@ html, body {
   }
   .search-shell { background: rgba(255,255,255,.78); }
 }
+
+/* v2.15.1 课表系列限定与扩展字段 */
+.sched-series-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 12px; }
+.sched-series-row .input { min-width: 0; }
+.sc-teacher { display: block; margin-top: 2px; font-size: 11.5px; color: var(--primary-2); }
+.sc-edit-card { margin-bottom: 12px; }
+.sc-edit-extra { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: -2px 0 0 70px; }
+.sc-edit-extra .input { padding: 0 8px; font-size: 12px; }
+@media (max-width: 700px) {
+  .sched-series-row { grid-template-columns: 1fr; }
+  .sc-edit-extra { margin-left: 0; }
+  .sc-edit-extra .input { font-size: 11.5px; }
+}
