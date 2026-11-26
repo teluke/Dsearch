@@ -21,7 +21,8 @@
     /* 文件夹折叠状态：v2.4.2 起改为「进入文件夹看子文件夹」，折叠逻辑退役 */
     folderFold: {},
     kwPinned: [],
-    searchRowPanel: true
+    searchRowPanel: true,
+    eventOverrides: {}
   };
 
   const KIND_LABEL = { doc: '文档', sheet: '表格', pdf: 'PDF', image: '图片', other: '文件' };
@@ -40,6 +41,8 @@
     try { state.kwPinned = (await DB.getSetting('kwPinned', [])) || []; } catch (e) { state.kwPinned = []; }
     try { state.search.filterWords = (await DB.getSetting('searchFilterWords', [])) || []; } catch (e) { state.search.filterWords = []; }
     try { state.searchRowPanel = (await DB.getSetting('searchRowPanel', true)) !== false; } catch (e) { state.searchRowPanel = true; }
+    try { state.eventOverrides = (await DB.getSetting('eventOverrides', {})) || {}; } catch (e) { state.eventOverrides = {}; }
+    Events.setOverrides(state.eventOverrides);
     try {
       const sc = state.schedule;
       sc.docIds = (await DB.getSetting('scheduleDocIds', [])) || [];
@@ -70,6 +73,11 @@
     await DB.setSetting('schedulePreviewId', sc.previewId);
     await DB.setSetting('scheduleSeriesName', sc.seriesName);
     await DB.setSetting('scheduleFieldKeywords', sc.fieldKeywords || defaultFieldKeywords());
+  }
+
+  async function saveEventOverrides() {
+    Events.setOverrides(state.eventOverrides);
+    await DB.setSetting('eventOverrides', state.eventOverrides || {});
   }
 
   function folderById(id) {
@@ -2108,30 +2116,38 @@
     return '<span class="ev-tag">剩 ' + ev.dueIn + ' 天</span>';
   }
 
+  function evEditBtnHtml(ev) {
+    return '<button class="memo-act ev-edit" data-ev-edit="' + esc(ev.overrideId) +
+      '" type="button" title="修改这一期">' + UI.icon('edit') + '修改</button>';
+  }
+
   function evCardHtml(ev, todayStr, idx) {
     const tag = evTag(ev, todayStr);
     const animStyle = idx != null ? ' style="animation-delay:' + Math.min(idx * 70, 420) + 'ms" data-anim="todo"' : '';
+    const editBtn = evEditBtnHtml(ev);
     if (ev.status === 'done') {
       const extra = ev.docs.length > 1 ? ' 等 ' + ev.docs.length + ' 份' : '';
-      return '<button class="ev-card todo-card neu press todo-anim" data-open="' + ev.topDoc.id + '"' + animStyle + ' type="button">' +
-        '<span class="todo-row">' +
+      const openAttr = ev.topDoc ? ' data-open="' + ev.topDoc.id + '" role="button" tabindex="0"' : '';
+      const meta = ev.topDoc ? esc(ev.topDoc.name) + extra : esc(ev.label);
+      return '<div class="ev-card todo-card neu' + (ev.topDoc ? ' press' : '') + ' todo-anim' + '"' + openAttr + animStyle + '>' +
+        '<div class="todo-row">' +
         '<span class="icon-box done todo-ico">' + UI.icon('check') + '</span>' +
-        '<span class="todo-body">' +
-        '<span class="ev-name todo-title">' + esc(ev.seriesName) + '</span>' +
-        '<span class="todo-tags">' +
+        '<div class="todo-body">' +
+        '<p class="ev-name todo-title">' + esc(ev.seriesName) + '</p>' +
+        '<div class="todo-tags">' +
         '<span class="todo-tag tt-kind">' + UI.icon('flag') + '<em>' + esc(ev.label) + '</em></span>' +
-        '<span class="todo-tag tt-time">' + UI.icon('clock') + '<em class="ev-period">' +
-        esc(ev.topDoc.name) + extra + '</em></span>' +
-        '</span>' +
-        '</span>' +
-        '<span class="ev-side">' + tag + '</span>' +
-        '</span>' +
-        '</button>';
+        '<span class="todo-tag tt-time">' + UI.icon('clock') + '<em class="ev-period">' + meta + '</em></span>' +
+        '</div>' +
+        (ev.hint ? '<span class="ev-hint">' + esc(ev.hint) + '</span>' : '') +
+        '</div>' +
+        '<span class="ev-side">' + tag + editBtn + '</span>' +
+        '</div>' +
+        '</div>';
     }
     const cls = ev.status === 'overdue' ? ' over' : (ev.remind || ev.dueIn <= 1 ? ' warn' : '');
-    const hint = ev.status === 'overdue'
+    const hint = ev.hint || (ev.status === 'overdue'
       ? '补归档一份「' + ev.seriesName + '」文档即可完成'
-      : '归档一份「' + ev.seriesName + '」文档后自动完成';
+      : '归档一份「' + ev.seriesName + '」文档后自动完成');
     const alertCls = (ev.status === 'overdue' || ev.remind) ? ' todo-alert' : '';
     return '<div class="ev-card todo-card neu todo-anim' + alertCls + '"' + animStyle + '>' +
       '<div class="todo-row">' +
@@ -2144,9 +2160,79 @@
       '</div>' +
       '<span class="ev-hint">' + esc(hint) + '</span>' +
       '</div>' +
-      '<span class="ev-side">' + tag + '</span>' +
+      '<span class="ev-side">' + tag + editBtn + '</span>' +
       '</div>' +
       '</div>';
+  }
+
+  /* 自动推导的周期事件按「这一期」单独修改：标题、日期区间、提醒、说明。
+     修改只覆盖显示与判定，不改动系列模板和原文件。 */
+  async function openEventEditor(overrideId) {
+    const todayStr = DB.todayISO();
+    const ev = Events.compute(state.docs, state.series, todayStr).find(function (x) {
+      return x.overrideId === overrideId;
+    });
+    if (!ev) { UI.toast('这一期事件已经不存在'); return; }
+    const o = state.eventOverrides[overrideId] || {};
+    const defaultHint = ev.status === 'overdue'
+      ? '补归档一份「' + ev.seriesName + '」文档即可完成'
+      : '归档一份「' + ev.seriesName + '」文档后自动完成';
+    const hint = o.hint || defaultHint;
+    const remindOpts = [0, 1, 3, 7].map(function (n) {
+      return '<option value="' + n + '"' + (ev.remindDays === n ? ' selected' : '') + '>' +
+        (n ? '截止前 ' + n + ' 天提醒' : '不提醒') + '</option>';
+    }).join('');
+
+    UI.openDrawer('修改这一期',
+      '<p class="drawer-hint">只改这一期，不影响系列模板和其他周期；日期区间会重新判断这一期是否已归档。</p>' +
+      '<div class="form">' +
+      '<div class="field"><label for="evEditTitle">事件名称</label>' +
+      '<input class="input" id="evEditTitle" maxlength="60" value="' + esc(ev.seriesName) + '"></div>' +
+      '<div class="input-row">' +
+      '<label class="mini-field"><span>开始日期</span><input class="input" id="evEditStart" type="date" value="' + esc(ev.startISO) + '"></label>' +
+      '<label class="mini-field"><span>截止日期</span><input class="input" id="evEditEnd" type="date" value="' + esc(ev.endISO) + '"></label>' +
+      '</div>' +
+      '<div class="field"><label for="evEditRemind">提醒</label><select class="input" id="evEditRemind">' + remindOpts + '</select></div>' +
+      '<div class="field"><label for="evEditHint">卡片说明</label>' +
+      '<textarea class="input" id="evEditHint" style="min-height:76px">' + esc(hint) + '</textarea></div>' +
+      '<div class="form-actions">' +
+      '<button class="btn danger" data-ev-reset type="button">恢复自动</button>' +
+      '<button class="btn primary" data-ev-save type="button">保存修改</button>' +
+      '</div></div>',
+      function (body) {
+        body.onclick = async function (e) {
+          if (e.target.closest('[data-ev-reset]')) {
+            const next = Object.assign({}, state.eventOverrides);
+            delete next[overrideId];
+            state.eventOverrides = next;
+            await saveEventOverrides();
+            UI.closeDrawer();
+            UI.toast('已恢复自动识别', 'ok');
+            await render(state.tab);
+            return;
+          }
+          if (!e.target.closest('[data-ev-save]')) return;
+          const title = (body.querySelector('#evEditTitle').value || '').trim();
+          const start = (body.querySelector('#evEditStart').value || '').trim();
+          const end = (body.querySelector('#evEditEnd').value || '').trim();
+          const remindDays = parseInt((body.querySelector('#evEditRemind') || {}).value || '0', 10) || 0;
+          const hintVal = (body.querySelector('#evEditHint').value || '').trim();
+          if (!start || !end || start > end) { UI.toast('开始日期不能晚于截止日期'); return; }
+          const next = Object.assign({}, state.eventOverrides);
+          next[overrideId] = {
+            title: title || ev.seriesName,
+            startISO: start,
+            endISO: end,
+            remindDays: remindDays,
+            hint: hintVal
+          };
+          state.eventOverrides = next;
+          await saveEventOverrides();
+          UI.closeDrawer();
+          UI.toast('这一期已修改', 'ok');
+          await render(state.tab);
+        };
+      });
   }
 
   async function cycleEventsHtml(todayStr) {
@@ -3966,6 +4052,9 @@
         openHiddenDocs();
         return;
       }
+
+      const evEdit = e.target.closest('[data-ev-edit]');
+      if (evEdit) { await openEventEditor(evEdit.getAttribute('data-ev-edit')); return; }
 
       const openBtn = e.target.closest('[data-open]');
       if (openBtn) {

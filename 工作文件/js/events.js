@@ -3,6 +3,13 @@
 (function () {
   function pad(n) { return String(n).padStart(2, '0'); }
 
+  /* 单期事件的手动修改：键 = 系列ID@周期键，由 views.js 从 settings 读进来 */
+  let overrides = {};
+
+  function setOverrides(obj) {
+    overrides = obj && typeof obj === 'object' ? obj : {};
+  }
+
   function toISO(d) {
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   }
@@ -77,23 +84,32 @@
       let cursor = new Date(start.getTime());
       let guard = 0;
       while (cursor <= curStart && guard < 400) {
-        let endD, key, startISO, endISO, label;
+        let endD, key, baseStartISO, baseEndISO, baseLabel;
         if (cycle === 'week') {
           endD = addDays(cursor, 6);
-          startISO = toISO(cursor);
-          endISO = toISO(endD);
-          key = 'w:' + startISO;
-          label = weekLabelOf(startISO, endISO);
+          baseStartISO = toISO(cursor);
+          baseEndISO = toISO(endD);
+          key = 'w:' + baseStartISO;
+          baseLabel = weekLabelOf(baseStartISO, baseEndISO);
           cursor = addDays(cursor, 7);
         } else {
           endD = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
-          startISO = toISO(cursor);
-          endISO = toISO(endD);
-          key = 'm:' + startISO.slice(0, 7);
-          label = monthLabelOf(startISO);
+          baseStartISO = toISO(cursor);
+          baseEndISO = toISO(endD);
+          key = 'm:' + baseStartISO.slice(0, 7);
+          baseLabel = monthLabelOf(baseStartISO);
           cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
         }
         guard++;
+
+        /* 这一期被手动改过：标题、日期区间、提醒天数、说明以修改为准 */
+        const overrideId = s.id + '@' + key;
+        const o = overrides[overrideId] || {};
+        const startISO = o.startISO || baseStartISO;
+        const endISO = o.endISO || baseEndISO;
+        const label = o.label || (startISO === baseStartISO && endISO === baseEndISO
+          ? baseLabel : (cycle === 'week' ? weekLabelOf(startISO, endISO) : monthLabelOf(startISO)));
+        const remindDays = (typeof o.remindDays === 'number') ? o.remindDays : (s.remindDays || 0);
 
         const inRange = dated
           .filter(function (x) { return x.date >= startISO && x.date <= endISO; })
@@ -105,21 +121,24 @@
         else status = 'pending';
 
         const dueIn = status === 'pending' ? daysBetween(todayStr, endISO) : null;
-        const remind = status === 'pending' && (s.remindDays || 0) > 0 && dueIn <= s.remindDays;
+        const remind = status === 'pending' && remindDays > 0 && dueIn <= remindDays;
 
         out.push({
           seriesId: s.id,
-          seriesName: s.name,
+          seriesName: o.title || s.name,
           cycle: cycle,
           key: key,
+          overrideId: overrideId,
+          custom: !!(o.title || o.hint || o.startISO || o.endISO || typeof o.remindDays === 'number'),
           startISO: startISO,
           endISO: endISO,
           label: label,
+          hint: o.hint || '',
           deadline: deadlineLabel({ cycle: cycle, endISO: endISO }),
           status: status,
           dueIn: dueIn,
           remind: remind,
-          remindDays: s.remindDays || 0,
+          remindDays: remindDays,
           docs: inRange.map(function (x) { return x.doc; }),
           topDoc: inRange.length ? inRange[0].doc : null
         });
@@ -152,6 +171,7 @@
 
   window.Events = {
     compute: compute,
+    setOverrides: setOverrides,
     doneKeySet: doneKeySet,
     newlyDone: newlyDone
   };
