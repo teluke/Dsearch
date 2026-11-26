@@ -192,6 +192,60 @@
     }
   }
 
+  /* 居中放大面板：表格命中行提取后铺满屏幕中央，看完可关掉 */
+  function openRowPanel(title, html, eyebrow) {
+    const el = document.getElementById('rowPanel');
+    if (!el) return;
+    const t = document.getElementById('rowPanelTitle');
+    const e = document.getElementById('rowPanelEyebrow');
+    const b = document.getElementById('rowPanelBody');
+    if (t) t.textContent = title || '表格命中行';
+    if (e) e.textContent = eyebrow || '表格命中行';
+    if (b) b.innerHTML = html || '';
+    el.classList.add('open');
+    el.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeRowPanel() {
+    const el = document.getElementById('rowPanel');
+    if (!el) return;
+    el.classList.remove('open');
+    el.setAttribute('aria-hidden', 'true');
+  }
+
+  function rowPanelOpen() {
+    const el = document.getElementById('rowPanel');
+    return !!(el && el.classList.contains('open'));
+  }
+
+  /* 把 { head:[], rows:[[]], query:'' } 渲染成一张横向表格：
+     表头与每个单元格都按列对齐，命中词包 <mark>。 */
+  function rowTableHtml(data) {
+    const d = data || {};
+    const head = d.head || [];
+    const rows = d.rows || [];
+    const query = String(d.query || '').trim();
+    const cols = Math.max(head.length, rows.reduce(function (m, r) { return Math.max(m, r.length); }, 0));
+    if (!cols) return '<div class="rp-empty">这一行没有可显示的单元格</div>';
+    const mark = function (v) {
+      const s = esc(v);
+      if (!query) return s;
+      const q = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      try { return s.replace(new RegExp('(' + q + ')', 'gi'), '<mark class="kw-hit">$1</mark>'); }
+      catch (e) { return s; }
+    };
+    let out = '<div class="rp-scroll"><table class="rp-table"><thead><tr>';
+    out += '<th class="rp-idx">#</th>';
+    for (let c = 0; c < cols; c++) out += '<th>' + (head[c] ? mark(head[c]) : '—') + '</th>';
+    out += '</tr></thead><tbody>';
+    rows.forEach(function (r, i) {
+      out += '<tr><td class="rp-idx">' + (i + 1) + '</td>';
+      for (let c = 0; c < cols; c++) out += '<td>' + (r[c] ? mark(r[c]) : '') + '</td>';
+      out += '</tr>';
+    });
+    return out + '</tbody></table></div>';
+  }
+
   /* 进度 */
   function progress(show, percent, text) {
     const el = $('#progress');
@@ -223,12 +277,14 @@
     if (t) { closeDrawer(); return; }
     const m = e.target.closest('[data-close-modal]');
     if (m) { closeModal(false); return; }
+    if (e.target.closest('[data-close-rowpanel]')) { closeRowPanel(); return; }
     const btn = e.target.closest('[data-modal]');
     if (btn) { closeModal(btn.getAttribute('data-modal') === 'ok'); }
   });
 
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
+      if (rowPanelOpen()) { closeRowPanel(); return; }
       if ($('#modal').classList.contains('open')) { closeModal(false); return; }
       if ($('#drawer').classList.contains('open')) closeDrawer();
     }
@@ -248,6 +304,10 @@
     onDrawerClose: onDrawerClose,
     confirm: confirmBox,
     closeModal: closeModal,
+    openRowPanel: openRowPanel,
+    closeRowPanel: closeRowPanel,
+    rowPanelOpen: rowPanelOpen,
+    rowTableHtml: rowTableHtml,
     progress: progress,
     resultHtml: resultHtml,
     celebrate: celebrate

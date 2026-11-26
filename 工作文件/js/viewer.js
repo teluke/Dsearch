@@ -155,6 +155,46 @@
     }
   }
 
+  /* 表格命中行提取：从已经渲染好的表格 DOM 里取表头 + 所有命中行，
+     按列对齐后交给居中面板。跳过冻结序号列，隐私样式由 views/ui 层管。 */
+  function collectHitRows(rootEl) {
+    if (!rootEl) return null;
+    const tables = rootEl.querySelectorAll('table');
+    let head = [];
+    const rows = [];
+    for (let t = 0; t < tables.length; t++) {
+      const table = tables[t];
+      const hitRows = table.querySelectorAll('tr.hit-line');
+      if (!hitRows.length) continue;
+      if (!head.length) {
+        const headRow = table.querySelector('thead tr') || table.rows[0];
+        if (headRow) {
+          head = Array.prototype.slice.call(headRow.children)
+            .filter(function (c) { return !c.classList.contains('row-idx'); })
+            .map(function (c) { return c.textContent.trim(); });
+        }
+      }
+      for (let i = 0; i < hitRows.length; i++) {
+        const cells = Array.prototype.slice.call(hitRows[i].children)
+          .filter(function (c) { return !c.classList.contains('row-idx'); })
+          .map(function (c) { return c.textContent.trim(); });
+        if (cells.some(function (c) { return c; })) rows.push(cells);
+      }
+    }
+    return rows.length ? { head: head, rows: rows } : null;
+  }
+
+  async function maybeOpenHitPanel(query) {
+    if (!query) return;
+    let on = true;
+    try { on = await DB.getSetting('searchRowPanel', true) !== false; } catch (e) { /* 读不到就按默认开 */ }
+    if (!on) return;
+    const data = collectHitRows(el.body);
+    if (!data) return;
+    data.query = query;
+    UI.openRowPanel('命中 ' + data.rows.length + ' 行 · ' + query, UI.rowTableHtml(data), '表格横向信息 · 已同步提取');
+  }
+
   /* PDF 没有可选文本层：用 getTextContent 找到命中的页码 */
   async function pdfHitPages(pdf, query) {
     const pages = [];
@@ -764,6 +804,7 @@
     if (!el.root || !el.root.classList.contains('open')) return;
     resetHits();
     stopOcrWatch();
+    if (UI.rowPanelOpen && UI.rowPanelOpen()) UI.closeRowPanel();
     if (el.zoom) el.zoom.hidden = true;
     const card = el.root.querySelector('.viewer-card');
     if (card) card.classList.remove('zoomable');
@@ -832,6 +873,7 @@
         const marks = highlightDom(el.body, query);
         decorateHitLines(el.body, marks);
         setupHits(query, marks, []);
+        maybeOpenHitPanel(query);
       }
 
       /* 内容横向溢出时显示左右平移滑块；竖向缩放滑块就位 */

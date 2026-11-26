@@ -20,7 +20,8 @@
     folders: [],
     /* 文件夹折叠状态：v2.4.2 起改为「进入文件夹看子文件夹」，折叠逻辑退役 */
     folderFold: {},
-    kwPinned: []
+    kwPinned: [],
+    searchRowPanel: true
   };
 
   const KIND_LABEL = { doc: '文档', sheet: '表格', pdf: 'PDF', image: '图片', other: '文件' };
@@ -38,6 +39,7 @@
     try { state.folders = await DB.listFolders(); } catch (e) { state.folders = []; }
     try { state.kwPinned = (await DB.getSetting('kwPinned', [])) || []; } catch (e) { state.kwPinned = []; }
     try { state.search.filterWords = (await DB.getSetting('searchFilterWords', [])) || []; } catch (e) { state.search.filterWords = []; }
+    try { state.searchRowPanel = (await DB.getSetting('searchRowPanel', true)) !== false; } catch (e) { state.searchRowPanel = true; }
     try {
       const sc = state.schedule;
       sc.docIds = (await DB.getSetting('scheduleDocIds', [])) || [];
@@ -1336,6 +1338,47 @@
       });
   }
 
+  /* 点课表关键词：把课表文件里含这个词的表格行按表头对齐，放大到屏幕中央。
+     关键词正好是表头列名（如「授课教师」）时，列出该列所有数据行。 */
+  async function openScheduleKeywordRows(word) {
+    const w = String(word || '').trim();
+    if (!w) return;
+    const docs = scheduleSelectedDocs();
+    if (!docs.length) { UI.toast('先点右上角文件图标加入课表文件'); return; }
+    let head = [];
+    let colIdx = -1;
+    const rows = [];
+    docs.forEach(function (d) {
+      const lines = scheduleTextOf(d).split(/\r?\n/);
+      const header = scheduleHeaderMap(lines);
+      if (header && !head.length) head = splitScheduleCells(lines[header.row]);
+      if (header) {
+        for (let i = 0; i < head.length; i++) {
+          if (head[i] && head[i].indexOf(w) >= 0) { colIdx = i; break; }
+        }
+      }
+      lines.forEach(function (line, idx) {
+        if (header && idx === header.row) return;
+        const s = String(line || '').trim();
+        if (!s || (!colIdxIsHit(colIdx, s, w))) return;
+        const cells = splitScheduleCells(s).map(function (c) {
+          const v = String(c || '').trim();
+          return isSchedulePrivateToken(v) ? '' : v;
+        });
+        if (colIdx >= 0 && !cells[colIdx]) return;
+        if (cells.some(function (c) { return c; })) rows.push(cells);
+      });
+    });
+    function colIdxIsHit(col, text, kw) {
+      if (col >= 0) return true;
+      return text.indexOf(kw) >= 0;
+    }
+    if (!rows.length) { UI.toast('课表里没有找到「' + w + '」对应的表格行'); return; }
+    UI.openRowPanel('关键词「' + w + '」· ' + rows.length + ' 行',
+      UI.rowTableHtml({ head: head, rows: rows, query: w }),
+      '课表栏目 · 表格横向信息');
+  }
+
   async function openScheduleKeywordEditor() {
     const words = (state.schedule.keywords && state.schedule.keywords.length)
       ? state.schedule.keywords.slice() : SCHEDULE_DEFAULT_KW.slice();
@@ -2077,6 +2120,12 @@
       '<span class="icon-box">' + UI.icon('trash') + '</span>' +
       '<span class="s-main"><span class="s-title">批量管理</span><span class="s-desc">勾选后删除，支持全选</span></span>' +
       '<span class="chev">' + UI.icon('chev') + '</span>' +
+      '</button>' +
+      '<button class="setting-item neu press" data-rowpanel-toggle type="button">' +
+      '<span class="icon-box">' + UI.icon('sheet') + '</span>' +
+      '<span class="s-main"><span class="s-title">命中行自动放大</span>' +
+      '<span class="s-desc">搜索命中表格时，把整行横向信息同步提取到屏幕中央，便于逐项查看；不影响原文件高亮</span></span>' +
+      '<span class="switch' + (state.searchRowPanel ? ' on' : '') + '"><i></i></span>' +
       '</button>' +
       '<button class="setting-item neu press" data-clear-all type="button">' +
       '<span class="icon-box other">' + UI.icon('database') + '</span>' +
@@ -3457,6 +3506,8 @@
 
       /* 课表栏目 */
       if (e.target.closest('[data-sched-docs]')) { await openScheduleDocPicker(); return; }
+      const schedKwChip = e.target.closest('.sched-kwline .kw-chip:not(.add)');
+      if (schedKwChip) { await openScheduleKeywordRows(schedKwChip.textContent.trim()); return; }
       if (e.target.closest('[data-sched-kw]')) { await openScheduleKeywordEditor(); return; }
       if (e.target.closest('[data-sched-week]')) { await openScheduleWeekEditor(); return; }
       if (e.target.closest('[data-sched-edit]')) { await openScheduleCourseEdit(weekdayIndex(DB.todayISO())); return; }
@@ -3936,6 +3987,14 @@
       }
 
       if (e.target.closest('[data-export-backup]')) { doExport(); return; }
+
+      if (e.target.closest('[data-rowpanel-toggle]')) {
+        state.searchRowPanel = !state.searchRowPanel;
+        await DB.setSetting('searchRowPanel', state.searchRowPanel);
+        UI.toast(state.searchRowPanel ? '已开启命中行自动放大' : '已关闭命中行自动放大', 'ok');
+        await render('settings');
+        return;
+      }
 
       if (window.OCRJob) {
         if (e.target.closest('[data-ocr-toggle]')) {

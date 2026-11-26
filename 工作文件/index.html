@@ -100,7 +100,7 @@
           <span class="nav-label">扫码连接电脑</span>
         </button>
       </nav>
-      <div class="nav-foot">工作文件 v2.15.2 · 无账号 · 无云端</div>
+      <div class="nav-foot">工作文件 v2.16.0 · 无账号 · 无云端</div>
     </div>
   </div>
 
@@ -139,6 +139,22 @@
   <div class="modal" id="modal" aria-hidden="true">
     <div class="modal-scrim" data-close-modal></div>
     <div class="modal-card neu" role="dialog" aria-modal="true" id="modalCard"></div>
+  </div>
+
+  <div class="row-panel" id="rowPanel" aria-hidden="true">
+    <div class="row-panel-scrim" data-close-rowpanel></div>
+    <div class="row-panel-card neu" role="dialog" aria-modal="true" aria-labelledby="rowPanelTitle">
+      <div class="row-panel-head">
+        <div class="rp-title">
+          <span class="rp-eyebrow" id="rowPanelEyebrow">表格命中行</span>
+          <h2 id="rowPanelTitle"></h2>
+        </div>
+        <button class="icon-btn neu" data-close-rowpanel type="button" aria-label="关闭">
+          <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="row-panel-body" id="rowPanelBody"></div>
+    </div>
   </div>
 
   <div class="viewer" id="viewer" aria-hidden="true">
