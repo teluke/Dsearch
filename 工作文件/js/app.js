@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.24.0';
+  window.APP_VERSION = '2.25.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -338,7 +338,42 @@
     } catch (e) { /* 后台任务失败静默 */ }
   }
 
+  /* 光标聚光灯：背景层里的一团柔光跟着指针走。
+     只写一次 transform，走合成器；不改 CSS 变量，避免整棵树重算样式。
+     触屏上抬手 900ms 后淡出，不长期占用一层发光。 */
+  function bindSkyLight() {
+    const el = document.getElementById('skyLight');
+    if (!el) return;
+    const R = 280;
+    let raf = 0, x = 0, y = 0, timer = 0;
+    function apply() {
+      raf = 0;
+      el.style.transform = 'translate3d(' + Math.round(x - R) + 'px,' + Math.round(y - R) + 'px,0)';
+    }
+    function move(e) {
+      const p = e.touches && e.touches.length ? e.touches[0] : e;
+      if (!p || typeof p.clientX !== 'number') return;
+      x = p.clientX;
+      y = p.clientY;
+      if (!el.classList.contains('on')) el.classList.add('on');
+      if (!raf) raf = requestAnimationFrame(apply);
+      if (e.pointerType && e.pointerType !== 'mouse') {
+        clearTimeout(timer);
+        timer = setTimeout(function () { el.classList.remove('on'); }, 900);
+      }
+    }
+    function hide() {
+      clearTimeout(timer);
+      el.classList.remove('on');
+    }
+    window.addEventListener('pointermove', move, { passive: true });
+    window.addEventListener('pointerdown', move, { passive: true });
+    document.addEventListener('mouseleave', hide);
+    window.addEventListener('blur', hide);
+  }
+
   async function boot() {
+    bindSkyLight();
     try {
       await DB.initSettings();
     } catch (err) {
