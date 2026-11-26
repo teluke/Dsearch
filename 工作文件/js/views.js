@@ -1032,6 +1032,12 @@
     return /^[A-Za-z]\d{6,}$/.test(s) || /^\d{6,}$/.test(s) ||
       /^1\d{10}$/.test(s) || s.indexOf('@') >= 0;
   }
+  /* 隐私栏目：表头本身点名了身份信息，整列既不进课件卡片也不进行面板 */
+  function isSchedulePrivateHeader(label) {
+    const t = String(label || '').replace(/\s/g, '');
+    if (!t) return false;
+    return /(?:教工号|工号|学号|身份证|出生日期|生日|性别|学历|学位|职称|婚姻|政治面貌|民族|籍贯|住址|家庭住址|电话|手机|邮箱|银行卡|账号|密码)/.test(t);
+  }
 
   function formatPeriods(s) {
     const raw = String(s || '').trim();
@@ -1098,7 +1104,7 @@
       const map = {
         row: i,
         teacher: headerColumn(cells, ['授课教师', '任课教师', '教师', '老师']),
-        name: headerColumn(cells, ['课程名称', '课程', '课名', '科目']),
+        name: headerColumn(cells, ['课程名称', '开课课程', '课程', '课名', '科目']),
         room: headerColumn(cells, ['上课地点', '教室', '地点', '教学楼']),
         className: headerColumn(cells, ['上课班级', '班级', '教学班']),
         period: headerColumn(cells, ['节次', '课时'])
@@ -1129,22 +1135,63 @@
     return '';
   }
   function isNameHeader(t) {
-    return /课程名称|课程名|课名|科目/.test(t) || t === '课程';
+    return /课程名称|开课课程|课程名|课名|科目/.test(t) || t === '课程';
   }
   function cleanDisplayCell(v) {
     return String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
   }
-  function classifiedRowFields(rawCells, headCells, picked) {
+  /* 关键词标注：把用户选的关键词绑到具体表格列。
+     先按表头名匹配（如「教室」→上课教室），再按数据行里的单元格值匹配
+     （如教师姓名→授课教师、课程名→开课课程）。隐私列直接跳过。 */
+  function keywordColumnMap(headCells, rows, keywords) {
+    const hit = {};
+    if (!headCells || !headCells.length) return hit;
+    const marked = {};
+    (rows || []).forEach(function (cells) {
+      cells.forEach(function (cell, i) {
+        if (i >= headCells.length) return;
+        const v = cleanDisplayCell(cell);
+        if (v && !isSchedulePrivateToken(v)) marked[v] = true;
+      });
+    });
+    (keywords || []).forEach(function (kw) {
+      const w = String(kw || '').trim();
+      if (!w || isSchedulePrivateToken(w)) return;
+      let col = -1;
+      for (let i = 0; i < headCells.length; i++) {
+        const h = cleanDisplayCell(headCells[i]);
+        if (isSchedulePrivateHeader(h)) continue;
+        if (h === w || (w.length >= 2 && h.indexOf(w) >= 0)) { col = i; break; }
+      }
+      if (col < 0 && marked[w]) {
+        for (let i = 0; i < headCells.length; i++) {
+          const h = cleanDisplayCell(headCells[i]);
+          if (isSchedulePrivateHeader(h)) continue;
+          const cellsWith = (rows || []).some(function (cells) {
+            return cleanDisplayCell(cells[i]) === w;
+          });
+          if (cellsWith) { col = i; break; }
+        }
+      }
+      if (col >= 0) hit[w] = col;
+    });
+    return hit;
+  }
+
+  function classifiedRowFields(rawCells, headCells, picked, kwMap) {
     const out = [];
+    const markedCols = {};
+    Object.keys(kwMap || {}).forEach(function (w) { markedCols[kwMap[w]] = true; });
     if (!headCells || !headCells.length) {
       SCHEDULE_FIELDS.forEach(function (f) {
         const v = cleanDisplayCell(picked && picked[f.key]);
-        if (v) out.push({ label: SCHEDULE_LABELS[f.key], value: v, key: f.key });
+        if (v) out.push({ label: SCHEDULE_LABELS[f.key], value: v, key: f.key, marked: false });
       });
       return out;
     }
     for (let i = 0; i < headCells.length; i++) {
       let label = cleanDisplayCell(headCells[i]);
+      if (isSchedulePrivateHeader(label)) continue;
       let value = cleanDisplayCell(rawCells[i]);
       if (isSchedulePrivateToken(label)) label = '';
       if (isSchedulePrivateToken(value)) value = '';
@@ -1152,13 +1199,13 @@
       if (key && picked && picked[key]) value = picked[key];
       if (!value) continue;
       if (!label) label = (key && SCHEDULE_LABELS[key]) || ('第' + (i + 1) + '列');
-      out.push({ label: label, value: value, key: key });
+      out.push({ label: label, value: value, key: key, marked: !!markedCols[i] });
     }
     SCHEDULE_FIELDS.forEach(function (f) {
       const v = cleanDisplayCell(picked && picked[f.key]);
       if (!v) return;
       if (!out.some(function (x) { return x.key === f.key; })) {
-        out.push({ label: SCHEDULE_LABELS[f.key], value: v, key: f.key });
+        out.push({ label: SCHEDULE_LABELS[f.key], value: v, key: f.key, marked: false });
       }
     });
     return out;
@@ -1177,12 +1224,12 @@
     const out = [];
     function push(raw) {
       const w = String(raw || '').replace(/^\s+|\s+$/g, '');
-      if (!w || w.length > 12 || isSchedulePrivateToken(w) || seen[w]) return;
+      if (!w || w.length > 12 || isSchedulePrivateToken(w) || isSchedulePrivateHeader(w) || seen[w]) return;
       seen[w] = true;
       out.push(w);
     }
     SCHEDULE_FIELDS.forEach(function (f) { push(f.label); });
-    ['节次', '课时', '课程名称', '课程', '课名', '科目', '上课地点', '教室', '地点',
+    ['节次', '课时', '课程名称', '开课课程', '课程', '课名', '科目', '上课地点', '教室', '地点',
       '上课班级', '班级', '教学班', '授课教师', '任课教师', '教师', '老师'].forEach(push);
     (state.schedule.keywords || []).forEach(push);
     scheduleSelectedDocs().forEach(function (d) {
@@ -1196,7 +1243,7 @@
         const cells = splitScheduleCells(line);
         if (cells.length < 2 || cells.length > 12) return;
         if (!cells.every(function (c) { return String(c).length <= 12; })) return;
-        if (cells.some(function (c) { return /节次|课时|课程|课名|科目|教室|地点|班级|教师|老师/.test(c); })) {
+        if (cells.some(function (c) { return /节次|课时|课程|课名|科目|教室|地点|班级|教师|老师|开课/.test(c); })) {
           cells.forEach(push);
         }
       });
@@ -1230,6 +1277,11 @@
       const lines = text.split(/\r?\n/);
       const header = scheduleHeaderMap(lines);
       const headCells = header ? splitScheduleCells(lines[header.row]) : null;
+      /* 先用整张表的数据行建立「关键词 → 列号」，值型关键词也能定位到列 */
+      const allRows = lines.map(function (ln, idx) {
+        return (header && idx === header.row) ? null : splitScheduleCells(ln);
+      }).filter(function (r) { return r && r.length; });
+      const kwMap = keywordColumnMap(headCells, allRows, kws);
       lines.forEach(function (line, lineIdx) {
         if (header && lineIdx === header.row) return;
         const s = line.trim();
@@ -1350,7 +1402,7 @@
           });
         }
         if (!name && !room && !className) return;
-        const rowFields = classifiedRowFields(rawCells, headCells, picked);
+        const rowFields = classifiedRowFields(rawCells, headCells, picked, kwMap);
         out.push({
           period: period || formatPeriods(headerPeriod) || '—',
           name: name || '未命名课程',
@@ -1396,11 +1448,22 @@
 
     const courseHtml = courses.length
       ? courses.map(function (c, i) {
-          const fields = (c.fields && c.fields.length ? c.fields : fallbackFields(c))
-            .filter(function (f) { return f.label !== '节次' && f.label !== '课时' && f.label !== '课程名称'; });
+          const allFields = (c.fields && c.fields.length ? c.fields : fallbackFields(c))
+            .filter(function (f) {
+              const label = String(f.label || '');
+              if (f.key === 'period' || label === '课程名称') return false;
+              if (/节次|课时|开课时间|星期|周次/.test(label)) return false;
+              if (isSchedulePrivateHeader(label) || isSchedulePrivateToken(f.value)) return false;
+              return true;
+            });
+          /* 关键词标注的栏目排前面，并把关键词词本身带上，方便和上方 chip 对照 */
+          const fields = allFields.slice().sort(function (a, b) {
+            return (b.marked ? 1 : 0) - (a.marked ? 1 : 0);
+          });
           const fieldHtml = fields.length
             ? '<span class="sc-fields">' + fields.map(function (f) {
-                return '<span class="sc-field"><em>' + esc(String(f.label)) + '</em>' +
+                return '<span class="sc-field' + (f.marked ? ' marked' : '') + '">' +
+                  '<em>' + esc(String(f.label)) + '</em>' +
                   '<span>' + esc(String(f.value)) + '</span></span>';
               }).join('') + '</span>'
             : '';
@@ -1566,7 +1629,14 @@
       return text.indexOf(kw) >= 0;
     }
     if (!rows.length) { UI.toast('课表里没有找到「' + w + '」对应的表格行'); return; }
-    const classes = head.filter(function (h) { return String(h || '').trim() && !isSchedulePrivateToken(h); });
+    /* 隐私栏目整列剔除：表头与对应单元格一起去掉，索引仍对齐 */
+    const keep = [];
+    head.forEach(function (h, i) {
+      if (String(h || '').trim() && !isSchedulePrivateHeader(h) && !isSchedulePrivateToken(h)) keep.push(i);
+    });
+    const safeHead = keep.map(function (i) { return head[i]; });
+    const safeRows = rows.map(function (r) { return keep.map(function (i) { return r[i] || ''; }); });
+    const classes = safeHead;
     const summary = classes.length
       ? '<div class="rp-classify"><span class="rp-cls-title">表头分类</span>' +
         classes.map(function (h) {
@@ -1574,7 +1644,7 @@
         }).join('') + '</div>'
       : '';
     UI.openRowPanel('关键词「' + w + '」· ' + rows.length + ' 行',
-      summary + UI.rowTableHtml({ head: head, rows: rows, query: w }),
+      summary + UI.rowTableHtml({ head: safeHead, rows: safeRows, query: w }),
       '课表栏目 · 横向行按表头分类');
   }
 

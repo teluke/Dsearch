@@ -3199,3 +3199,10 @@ html, body {
   .sc-fields { gap: 3px 5px; }
   .sc-field { font-size: 11px; padding: 2px 6px; }
 }
+
+/* v2.20.0 关键词标注：命中关键词的栏目优先并加重 */
+.sc-field.marked {
+  background: rgba(108,139,245,.14);
+  box-shadow: inset 0 0 0 1px rgba(108,139,245,.22);
+}
+.sc-field.marked em { color: var(--primary); }
