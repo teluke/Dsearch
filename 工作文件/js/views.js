@@ -13,7 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表' },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {} },
     memoEditId: null,
     docs: [],
     series: [],
@@ -49,6 +49,7 @@
       sc.useAuto = (await DB.getSetting('scheduleUseAuto', true)) !== false;
       sc.previewId = (await DB.getSetting('schedulePreviewId', null)) || null;
       sc.seriesName = (await DB.getSetting('scheduleSeriesName', '课表')) || '课表';
+      sc.fieldKeywords = Object.assign(defaultFieldKeywords(), (await DB.getSetting('scheduleFieldKeywords', {})) || {});
       /* 只保留当前课表系列里的文件；没有勾过就默认取最新一份 */
       const allowed = scheduleSeriesDocs();
       const kept = (sc.docIds || []).filter(function (id) {
@@ -68,6 +69,7 @@
     await DB.setSetting('scheduleUseAuto', sc.useAuto);
     await DB.setSetting('schedulePreviewId', sc.previewId);
     await DB.setSetting('scheduleSeriesName', sc.seriesName);
+    await DB.setSetting('scheduleFieldKeywords', sc.fieldKeywords || defaultFieldKeywords());
   }
 
   function folderById(id) {
@@ -954,6 +956,24 @@
     '教室', '教学楼', '实验楼', '实训室', '会议室', '报告厅', '操场', '图书馆', '体育馆', '活动室'
   ];
   const CN_NUM = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
+  /* 编辑课程抽屉里五个模块对应的字段；值空表示按表头自动识别 */
+  const SCHEDULE_FIELDS = [
+    { key: 'period', label: '节次' },
+    { key: 'name', label: '课程名称' },
+    { key: 'room', label: '上课地点' },
+    { key: 'className', label: '上课班级' },
+    { key: 'teacher', label: '授课教师' }
+  ];
+
+  function defaultFieldKeywords() {
+    const m = {};
+    SCHEDULE_FIELDS.forEach(function (f) { m[f.key] = ''; });
+    return m;
+  }
+
+  function escapeReg(s) {
+    return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
 
   function weekdayIndex(iso) {
     const d = new Date(iso + 'T00:00:00');
@@ -1039,6 +1059,24 @@
     return -1;
   }
 
+  /* 用户手选的关键词 → 表格列号：先精确、再包含、最后短表头反向包含 */
+  function columnByChoice(cells, choice) {
+    const c = String(choice || '').replace(/\s/g, '');
+    if (!c) return -1;
+    let best = -1;
+    let bestScore = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const t = String(cells[i] || '').replace(/\s/g, '');
+      if (!t) continue;
+      let score = 0;
+      if (t === c) score = 100;
+      else if (t.indexOf(c) >= 0) score = 80 - Math.min(20, t.length - c.length);
+      else if (c.indexOf(t) >= 0 && t.length >= 2) score = 60 - Math.min(20, c.length - t.length);
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    return best;
+  }
+
   /* 返回 { row, period, name, room, className, teacher }：各栏目所在的列号。
      只有整行像表头（含独立的「授课教师」单元格、且没有星期/节次数据）才认。 */
   function scheduleHeaderMap(lines) {
@@ -1065,8 +1103,43 @@
     return null;
   }
 
-  /* cleanCell 复用隐私过滤，单元格里出现工号/学号这类值直接当空 */
-  function extractCourses(docs, keywords, dayIdx) {
+  /* 编辑抽屉五个下拉的选项：表头列名 + 现有关键词 + 常用叫法，隐私值不进下拉 */
+  function scheduleFieldCandidates(fieldMap) {
+    const seen = {};
+    const out = [];
+    function push(raw) {
+      const w = String(raw || '').replace(/^\s+|\s+$/g, '');
+      if (!w || w.length > 12 || isSchedulePrivateToken(w) || seen[w]) return;
+      seen[w] = true;
+      out.push(w);
+    }
+    SCHEDULE_FIELDS.forEach(function (f) { push(f.label); });
+    ['节次', '课时', '课程名称', '课程', '课名', '科目', '上课地点', '教室', '地点',
+      '上课班级', '班级', '教学班', '授课教师', '任课教师', '教师', '老师'].forEach(push);
+    (state.schedule.keywords || []).forEach(push);
+    scheduleSelectedDocs().forEach(function (d) {
+      const lines = scheduleTextOf(d).split(/\r?\n/);
+      const header = scheduleHeaderMap(lines);
+      if (header) {
+        splitScheduleCells(lines[header.row]).forEach(push);
+        return;
+      }
+      lines.slice(0, 20).forEach(function (line) {
+        const cells = splitScheduleCells(line);
+        if (cells.length < 2 || cells.length > 12) return;
+        if (!cells.every(function (c) { return String(c).length <= 12; })) return;
+        if (cells.some(function (c) { return /节次|课时|课程|课名|科目|教室|地点|班级|教师|老师/.test(c); })) {
+          cells.forEach(push);
+        }
+      });
+    });
+    Object.keys(fieldMap || {}).forEach(function (k) { push(fieldMap[k]); });
+    return out.slice(0, 36);
+  }
+
+  /* cleanCell 复用隐私过滤，单元格里出现工号/学号这类值直接当空。
+     fieldMap 为编辑抽屉里手选的「字段 → 关键词」，空值沿用自动识别。 */
+  function extractCourses(docs, keywords, dayIdx, fieldMap) {
     const out = [];
     const dayA = SCHEDULE_DAYS[dayIdx];
     const dayB = SCHEDULE_DAYS_CN[dayIdx];
@@ -1088,6 +1161,7 @@
       if (!text) return;
       const lines = text.split(/\r?\n/);
       const header = scheduleHeaderMap(lines);
+      const headCells = header ? splitScheduleCells(lines[header.row]) : null;
       lines.forEach(function (line, lineIdx) {
         if (header && lineIdx === header.row) return;
         const s = line.trim();
@@ -1095,13 +1169,48 @@
         const dayHit = s.indexOf(dayA) >= 0 || s.indexOf(dayB) >= 0;
         if (!dayHit && anyDayRe.test(s)) return;
 
+        const rawCells = splitScheduleCells(s);
+        /* 手选关键词优先：表头有这一列就取该列；否则认行内「关键词 值」 */
+        function fieldCell(key) {
+          const choice = fieldMap && String(fieldMap[key] || '').trim();
+          if (!choice || choice === 'auto') return '';
+          function safe(v) {
+            const t = cleanCell(v);
+            return (t && !isSchedulePrivateToken(t)) ? t : '';
+          }
+          if (headCells) {
+            const col = columnByChoice(headCells, choice);
+            if (col >= 0) {
+              const v = safe(rawCells[col]);
+              if (v) return v;
+            }
+          }
+          const labelRe = new RegExp('^' + escapeReg(choice) + '\\s*[:：]?\\s*(.*)$');
+          for (let i = 0; i < rawCells.length; i++) {
+            const cell = cleanCell(rawCells[i]);
+            const m = cell.match(labelRe);
+            if (!m) continue;
+            const v = m[1] ? safe(m[1]) : safe(rawCells[i + 1]);
+            if (v) return v;
+          }
+          return '';
+        }
+        const picked = {
+          period: fieldCell('period'),
+          name: fieldCell('name'),
+          room: fieldCell('room'),
+          className: fieldCell('className'),
+          teacher: fieldCell('teacher')
+        };
+
         const pm = s.match(periodRe);
         const cm = pm ? null : s.match(compactPeriodRe);
-        const period = formatPeriods(pm ? pm[1] : (cm ? cm[1] : ''));
-        const hit = period || kws.some(function (k) { return k && s.indexOf(k) >= 0; });
+        const period = formatPeriods(pm ? pm[1] : (cm ? cm[1] : picked.period));
+        const hit = period || picked.name || picked.room || picked.className || picked.teacher ||
+          kws.some(function (k) { return k && s.indexOf(k) >= 0; });
         if (!hit) return;
 
-        let cells = splitScheduleCells(s);
+        let cells = rawCells.slice();
         /* 有表头就按列取栏目，取不到的列留空由后面的正则兜底 */
         let headerTeacher = '';
         let headerName = '';
@@ -1120,7 +1229,7 @@
           .filter(function (x) { return x && !isSchedulePrivateToken(x); })
           .filter(Boolean);
 
-        let room = headerRoom && !isSchedulePrivateToken(headerRoom) ? headerRoom : '';
+        let room = picked.room || (headerRoom && !isSchedulePrivateToken(headerRoom) ? headerRoom : '');
         let roomIdx = -1;
         cells.forEach(function (c, i) {
           if (!roomWordRe.test(c)) return;
@@ -1132,7 +1241,7 @@
           if (rm) room = rm[1];
         }
 
-        let className = headerClass && !isSchedulePrivateToken(headerClass) ? headerClass : '';
+        let className = picked.className || (headerClass && !isSchedulePrivateToken(headerClass) ? headerClass : '');
         if (!className) {
           for (let i = 0; i < cells.length; i++) {
             const m = cells[i].match(classRe);
@@ -1140,8 +1249,8 @@
           }
         }
 
-        /* 教师：表头列优先；没有表头时认行内「授课教师：姓名」或关键词触发 */
-        let teacher = headerTeacher && !isSchedulePrivateToken(headerTeacher) ? headerTeacher : '';
+        /* 教师：手选/表头列优先；没有表头时认行内「授课教师：姓名」 */
+        let teacher = picked.teacher || (headerTeacher && !isSchedulePrivateToken(headerTeacher) ? headerTeacher : '');
         if (!teacher) {
           for (let i = 0; i < cells.length; i++) {
             const m = cells[i].match(teacherLabelRe);
@@ -1153,7 +1262,7 @@
           }
         }
 
-        let name = headerName && !isSchedulePrivateToken(headerName) ? headerName : '';
+        let name = picked.name || (headerName && !isSchedulePrivateToken(headerName) ? headerName : '');
         if (!name && headerTeacher && teacher) {
           cells = cells.filter(function (c) { return c !== teacher; });
         }
@@ -1203,7 +1312,7 @@
     const dayIdx = weekdayIndex(todayStr);
     const dt = new Date(todayStr + 'T00:00:00');
     const md = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
-    const auto = extractCourses(docs, sc.keywords, dayIdx);
+    const auto = extractCourses(docs, sc.keywords, dayIdx, sc.fieldKeywords);
     const courses = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
     const week = (sc.week == null || sc.week === '') ? 1 : sc.week;
 
@@ -1435,9 +1544,13 @@
   async function openScheduleCourseEdit(dayIdx) {
     const sc = state.schedule;
     const docs = scheduleSelectedDocs();
-    const auto = extractCourses(docs, sc.keywords, dayIdx);
+    const currentMap = Object.assign(defaultFieldKeywords(), sc.fieldKeywords || {});
+    const candidates = scheduleFieldCandidates(currentMap);
+    function extractRows() {
+      return extractCourses(docs, sc.keywords, dayIdx, currentMap);
+    }
     const saved = (sc.courses || {})[dayIdx];
-    const list = (saved && saved.length ? saved : auto).map(function (c) {
+    const list = (saved && saved.length ? saved : extractRows()).map(function (c) {
       return { period: c.period, name: c.name, room: c.room, className: c.className || '', teacher: c.teacher || '' };
     });
 
@@ -1455,18 +1568,43 @@
         '</div></div>';
     }
 
+    /* 红笔标注的五个模块：每个输入框上方单独选一个关键词/表头列 */
+    function fieldSelectHtml(f) {
+      const val = currentMap[f.key] || '';
+      return '<label class="sc-fm-item"><span>' + esc(f.label) + '</span>' +
+        '<select class="input" data-sc-field="' + f.key + '" aria-label="' + esc(f.label) + '关键词">' +
+        '<option value=""' + (val ? '' : ' selected') + '>自动识别</option>' +
+        candidates.map(function (w) {
+          return '<option value="' + esc(w) + '"' + (val === w ? ' selected' : '') + '>' + esc(w) + '</option>';
+        }).join('') + '</select></label>';
+    }
+    const fieldMapHtml = '<div class="sc-fieldmap">' +
+      '<div class="sc-fm-title">字段对应关键词 <small>选好会按该列/词重新填入下面五行</small></div>' +
+      '<div class="sc-fm-grid">' + SCHEDULE_FIELDS.map(fieldSelectHtml).join('') + '</div></div>';
+
     UI.openDrawer(SCHEDULE_DAYS[dayIdx] + ' · 编辑课程',
-      '<p class="drawer-hint">第一行是节次、课程、教室，第二行可填班级和授课教师。工号、电话等隐私字段不会提取。</p>' +
+      '<p class="drawer-hint">五个模块分别选关键词：节次 / 课程名称 / 上课地点 / 上课班级 / 授课教师。切换后按对应列重新填入，手动改过的内容会被覆盖；工号、电话等隐私字段不会提取。</p>' +
+      fieldMapHtml +
       '<div id="scEditRows">' + list.map(rowHtml).join('') + '</div>' +
       '<button class="btn block" data-sc-add type="button">' + UI.icon('plus') + '加一节课</button>' +
       '<div class="drawer-foot"><button class="btn" data-sc-from-auto type="button">重新提取</button>' +
       '<button class="btn primary" data-sc-save type="button">保存</button></div>',
       function (body) {
         const wrap = body.querySelector('#scEditRows');
+        body.onchange = function (e) {
+          const sel = e.target.closest('[data-sc-field]');
+          if (!sel) return;
+          const key = sel.getAttribute('data-sc-field');
+          currentMap[key] = sel.value;
+          sc.fieldKeywords = Object.assign({}, currentMap);
+          saveSchedule();
+          wrap.innerHTML = extractRows().map(rowHtml).join('');
+          UI.toast('已按「' + (sel.value || '自动识别') + '」重新填入', 'ok');
+        };
         body.onclick = function (e) {
           if (e.target.closest('[data-sc-del]')) { const r = e.target.closest('.sc-edit-card'); if (r) r.remove(); return; }
           if (e.target.closest('[data-sc-add]')) { wrap.insertAdjacentHTML('beforeend', rowHtml({ period: '', name: '', room: '' })); return; }
-          if (e.target.closest('[data-sc-from-auto]')) { wrap.innerHTML = auto.map(rowHtml).join(''); return; }
+          if (e.target.closest('[data-sc-from-auto]')) { wrap.innerHTML = extractRows().map(rowHtml).join(''); return; }
           if (e.target.closest('[data-sc-save]')) {
             const rows = UI.$$('.sc-edit-card', wrap).map(function (r) {
               return {
@@ -1480,6 +1618,7 @@
             sc.courses = sc.courses || {};
             sc.courses[dayIdx] = rows;
             sc.useAuto = false;
+            sc.fieldKeywords = Object.assign({}, currentMap);
             saveSchedule().then(function () { UI.closeDrawer(); render('schedule'); UI.toast('今日课程已保存', 'ok'); });
           }
         };
@@ -3516,7 +3655,7 @@
         const idx = weekdayIndex(DB.todayISO());
         if (sc.useAuto) {
           sc.courses = sc.courses || {};
-          sc.courses[idx] = extractCourses(scheduleSelectedDocs(), sc.keywords, idx);
+          sc.courses[idx] = extractCourses(scheduleSelectedDocs(), sc.keywords, idx, sc.fieldKeywords);
         }
         sc.useAuto = !sc.useAuto;
         await saveSchedule();
