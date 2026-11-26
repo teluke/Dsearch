@@ -1668,7 +1668,11 @@
     const inWeek = courses.filter(function (c) { return courseInWeek(c, week); });
     const weekEmpty = courses.length > 0 && inWeek.length === 0;
     if (inWeek.length) courses = inWeek;
-    const dayCourses = rowMode ? courses.filter(function (c) { return c.today; }) : courses;
+    /* 关键词命中行里混着整周各天的课：只留选中这一天的，
+       其余日期的课回到各自日期（点上方周条切换），不在当天列表里堆着 */
+    const otherDayCount = rowMode
+      ? courses.filter(function (c) { return !c.today; }).length : 0;
+    if (rowMode) courses = courses.filter(function (c) { return c.today; });
 
     const courseHtml = courses.length
       ? (rowMode
@@ -1700,18 +1704,20 @@
             '<span class="sc-no">' + (i + 1) + '</span>' +
             '</div>';
         }).join(''))
-      : emptyBlock(kwMode ? '没有找到对应的课程行' : SCHEDULE_DAYS[dayIdx] + '没有课', docs.length
+      : emptyBlock(kwMode
+        ? (otherDayCount ? SCHEDULE_DAYS[dayIdx] + '没有这门课' : '没有找到对应的课程行')
+        : SCHEDULE_DAYS[dayIdx] + '没有课', docs.length
         ? (kwMode
-          ? '关键词「' + esc(activeKws.join(' + ')) + '」在原表里没有命中任何行，点「查看原表」核对表头写法'
+          ? (otherDayCount
+            ? '关键词「' + esc(activeKws.join(' + ')) + '」在' + SCHEDULE_DAYS[dayIdx] +
+              '没有命中，其他日期还有 ' + otherDayCount + ' 节，点上方日期条切过去看'
+            : '关键词「' + esc(activeKws.join(' + ')) + '」在原表里没有命中任何行，点「查看原表」核对表头写法')
           : '点「编辑课程」手动填写，或检查关键词设置')
         : '先点右上角文件图标加入课表文件');
 
-    const summaryHtml = rowMode ? kwSummaryHtml(view, activeKws, dayCourses, courses, {
-      isToday: sameAsToday, week: week, dayLabel: sameAsToday ? '今天' : SCHEDULE_DAYS[dayIdx]
-    }) : '';
     const dayWord = sameAsToday ? '今日' : '当天';
     const countText = rowMode
-      ? courses.length + ' 节 · ' + (dayCourses.length ? dayWord + ' ' + dayCourses.length + ' 节' : dayWord + '无课')
+      ? (courses.length ? dayWord + ' ' + courses.length + ' 节' : dayWord + '无课')
       : courses.length + ' 节 · ' + (kwMode ? '关键词「' + activeKws.join(' + ') + '」' : (sc.useAuto ? '自动提取' : '手动编辑'));
 
     /* 周条：本周 7 天的日期与星期，今天默认放大高亮 */
@@ -1731,9 +1737,28 @@
         '" type="button" aria-pressed="' + (w === week ? 'true' : 'false') + '">' + w + '</button>';
     }
 
+    /* 关键词行折叠：默认收起，只留当前生效的词，点一下铺开全部可拖动的词签 */
+    const kwOpen = !!sc.kwOpen;
+    const kwCurText = activeKws.length ? activeKws.join(' + ')
+      : ((sc.keywords || []).length ? '未选取' : '未设置');
+    const kwFoldHtml = '<div class="kw-fold' + (kwOpen ? ' open' : '') + '">' +
+      '<button class="kw-fold-head" data-sched-kw-fold type="button" aria-expanded="' + (kwOpen ? 'true' : 'false') +
+      '" aria-controls="schedKwLine" title="展开/收起关键词">' +
+      '<span class="kf-title">关键词</span>' +
+      '<span class="kf-cur">' + esc(kwCurText) + '</span>' +
+      '<i class="kf-chev">' + UI.icon('chev') + '</i></button>' +
+      '<div class="sched-kwline" id="schedKwLine">' +
+      (sc.keywords || []).slice(0, 14).map(function (k, i) {
+        const on = activeKws.indexOf(k) >= 0;
+        return '<button class="kw-chip' + (on ? ' on' : '') + '" data-sched-kw-pick="' +
+          esc(String(k)) + '" data-kw-index="' + i + '" type="button" aria-pressed="' +
+          (on ? 'true' : 'false') + '" title="点击选中/取消，横向拖动可排序">' + esc(String(k)) + '</button>';
+      }).join('') +
+      '<button class="kw-chip add" data-sched-kw type="button">＋ 编辑关键词</button>' +
+      '</div></div>';
+
     return '<div class="topbar"><div>' +
       '<p class="meta">课表 · ' + esc(todayStr) + '</p>' +
-      '<p class="sub">关键词提取后可直接用，也能手动改</p>' +
       '</div><div class="topbar-actions">' +
       '<button class="icon-btn neu press" data-sched-docs type="button" aria-label="选择课表文件" title="选择课表文件">' + UI.icon('file') + '</button>' +
       '<button class="icon-btn neu press" data-sched-kw type="button" aria-label="编辑提取关键词" title="编辑提取关键词">' + UI.icon('search') + '</button>' +
@@ -1745,29 +1770,21 @@
       '<span class="sh-date">' + mdOf(dayDate) + '</span>' +
       (isToday ? '<i class="sh-today">今天</i>' : '') +
       '</div>' +
-      '<button class="sh-week' + (week === curWeek ? '' : ' off') + '" data-sched-week type="button">第 ' + esc(String(curWeek)) + ' 周 <i>编辑</i></button>' +
+      '<button class="sh-week' + (week === curWeek ? '' : ' off') + '" data-sched-week type="button" title="编辑当前教学周" aria-label="编辑当前教学周">第 ' +
+      esc(String(curWeek)) + ' 周<i class="sh-week-ico" aria-hidden="true">' + UI.icon('edit') + '</i></button>' +
       '</div>' +
       '<div class="sw-days">' + daysHtml + '</div>' +
       '<p class="sw-range">' + mdOf(monday) + ' - ' + mdOf(dateOffset(monday, 6)) + '</p>' +
       '</div>' +
       '<div class="week-strip" role="group" aria-label="按周次查看课程">' +
       '<span class="ws-label">周次</span><div class="ws-scroll">' + weekChips + '</div></div>' +
-      '<div class="sched-kwline">' +
-      (sc.keywords || []).slice(0, 14).map(function (k, i) {
-        const on = activeKws.indexOf(k) >= 0;
-        return '<button class="kw-chip' + (on ? ' on' : '') + '" data-sched-kw-pick="' +
-          esc(String(k)) + '" data-kw-index="' + i + '" type="button" aria-pressed="' +
-          (on ? 'true' : 'false') + '" title="点击选中/取消，横向拖动可排序">' + esc(String(k)) + '</button>';
-      }).join('') +
-      '<button class="kw-chip add" data-sched-kw type="button">＋ 编辑关键词</button>' +
-      '</div>' +
+      kwFoldHtml +
       '<div class="section-title"><span>' + esc(sameAsToday ? '今日课程' : SCHEDULE_DAYS[dayIdx] + ' · 第 ' + week + ' 周') + '</span><span class="title-side">' +
       '<span class="count">' + esc(countText) + '</span>' +
       (kwMode ? '<button class="section-link" data-sched-kw-rows type="button" title="查看选中关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
       '</span></div>' +
       (weekEmpty ? '<p class="sched-weekhint">这一天的课周次对不上第 ' + week +
-        ' 周，先按全部列出；点右上「第 ' + curWeek + ' 周 编辑」改成实际教学周即可对上</p>' : '') +
-      summaryHtml +
+        ' 周，先按全部列出；点右上「第 ' + curWeek + ' 周」改成实际教学周即可对上</p>' : '') +
       '<div class="sched-list' + (rowMode ? ' kwc-list' : '') + '">' + courseHtml + '</div>' +
       '<div class="sched-actions">' +
       '<button class="btn" data-sched-edit type="button">' + UI.icon('edit') + '编辑课程</button>' +
@@ -2023,42 +2040,6 @@
       return a.order - b.order;
     });
     return { head: kwRows.head, rows: kwRows.rows, colOf: kwRows.colOf, cols: cols, courses: courses };
-  }
-
-  /* 关键词在表格里属于哪一栏：值型关键词反查列名，表头型关键词直接用该列名 */
-  function keywordColumnLabel(kwRows, word) {
-    const col = kwRows.colOf[word];
-    if (col == null) return '';
-    const label = cleanDisplayCell((kwRows.head || [])[col]);
-    if (!label || isSchedulePrivateHeader(label) || isSchedulePrivateToken(label)) return '';
-    return label;
-  }
-
-  function kwSummaryHtml(view, activeKws, todayCourses, allCourses, ctx) {
-    if (!view) return '';
-    const c = ctx || {};
-    const dayLabel = c.dayLabel || '今天';
-    const subject = (activeKws || []).map(function (w) {
-      const label = keywordColumnLabel(view, w);
-      return (label ? label + '「' + w + '」' : '关键词「' + w + '」');
-    }).join(' + ');
-    const parts = todayCourses.map(function (c) {
-      const when = c.period && c.period !== '—' ? '第 ' + c.period + ' 节' : (c.dayText || '');
-      const where = c.room || c.className || '';
-      return when + (c.name ? '《' + c.name + '》' : '') + (where ? '（' + where + '）' : '');
-    });
-    const detail = todayCourses.length
-      ? '当日课程：' + parts.join('；')
-      : dayLabel + '没有排课' + (allCourses.length ? '，下面按原表顺序列出该关键词的全部 ' + allCourses.length + ' 节' : '');
-    const rest = allCourses.length > todayCourses.length
-      ? '<p class="kws-all">该关键词在原表共 ' + allCourses.length + ' 行，其他日期 ' +
-        (allCourses.length - todayCourses.length) + ' 行一并列在下方</p>'
-      : '';
-    const scope = (c.isToday ? '今日' : '本周') + ' ' + todayCourses.length + ' 节 / 共 ' + allCourses.length + ' 节';
-    return '<div class="sched-kwsum neu">' +
-      '<p class="kws-title"><b>' + esc(subject) + '</b><span>' + esc(scope) + '</span></p>' +
-      '<p class="kws-line">' + esc(detail) + '</p>' + rest +
-      '</div>';
   }
 
   function kwCourseCardHtml(c, i, sameAsToday) {
@@ -4529,6 +4510,18 @@
         sc.activeKeywords = cur;
         await saveSchedule();
         await renderScheduleOnly();
+        return;
+      }
+      /* 关键词行折叠：只切类名不重绘，拖动排序的监听还能继续用 */
+      const kwFoldBtn = e.target.closest('[data-sched-kw-fold]');
+      if (kwFoldBtn) {
+        const fold = kwFoldBtn.closest('.kw-fold');
+        if (fold) {
+          const open = !fold.classList.contains('open');
+          fold.classList.toggle('open', open);
+          kwFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+          state.schedule.kwOpen = open;
+        }
         return;
       }
       if (e.target.closest('[data-sched-kw]')) { await openScheduleKeywordEditor(); return; }

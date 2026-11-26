@@ -2769,6 +2769,8 @@ html, body {
   box-shadow: 0 1px 0 rgba(210,220,234,.45);
 }
 .sh-week i { font-style: normal; font-size: 11px; opacity: .7; margin-left: 4px; }
+/* v2.26：「编辑」二字换成小铅笔图标，压住上面那条给文字用的透明度 */
+.sh-week i.sh-week-ico { opacity: .42; margin-left: 1px; font-size: 0; }
 .sched-kwline { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 2px; }
 .kw-chip {
   padding: 4px 10px; border-radius: 999px; font-size: 11.5px;
@@ -2991,12 +2993,6 @@ html, body {
 }
 
 /* v2.23.0 今日课程：直接展示选中关键词在原表里的横向行 */
-.sched-kwsum { padding: 14px 16px; display: flex; flex-direction: column; gap: 5px; }
-.kws-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; font-size: 13px; color: var(--text-2); }
-.kws-title b { font-size: 15px; font-weight: 600; color: var(--text); }
-.kws-title span { font-size: 11.5px; color: var(--text-3); }
-.kws-line { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-2); }
-.kws-all { margin: 0; font-size: 11.5px; color: var(--text-3); }
 
 .sched-list.kwc-list { gap: 12px; }
 .sched-course.kwc { display: block; padding: 14px 16px; }
@@ -3378,3 +3374,327 @@ select.input { background-color: rgba(255, 255, 255, .9); }
   backdrop-filter: none !important;
 }
 
+
+/* ==========================================================================
+   v2.26.0 立体水晶按键 + 课表折叠与收敛
+   1) 按键：顶棱高光 / 侧面收边 / 落地投影，统一 3 档厚度（小签 / 按钮 / 大圆）
+   2) 按下：整体下沉 1px，投影收掉，改成内凹阴影 —— 像真的按进去
+   3) 选中：与按下同一套内凹阴影，但保留各自的主色
+   ========================================================================== */
+:root {
+  /* 水晶面：自上而下的白雾 → 通透奶面 */
+  --xtal-face:
+    linear-gradient(180deg, rgba(255, 255, 255, .90) 0%, rgba(255, 255, 255, .44) 15%, rgba(255, 255, 255, 0) 40%),
+    linear-gradient(167deg, #FFFFFF 0%, #F6FAFF 46%, #E7F1FE 100%);
+  --xtal-edge: rgba(255, 255, 255, .98);
+  --xtal-rim: rgba(174, 199, 232, .44);
+  /* 立起来：顶棱受光 + 底棱反光 + 贴地细影 + 落地散影 */
+  --xtal-up:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -3px 0 rgba(180, 203, 234, .52),
+    inset 0 -5px 6px rgba(163, 192, 228, .20),
+    inset 1px 0 0 rgba(255, 255, 255, .80),
+    inset -1px 0 0 rgba(255, 255, 255, .55),
+    0 1px 1px rgba(96, 132, 190, .20),
+    0 5px 10px -3px rgba(96, 132, 190, .30),
+    0 12px 20px -10px rgba(96, 132, 190, .38);
+  /* 按下去：面本身压暗一档，再让阴影堆在里侧 */
+  --xtal-face-sunk:
+    linear-gradient(180deg, rgba(255, 255, 255, .52) 0%, rgba(216, 230, 248, .34) 42%, rgba(203, 221, 246, .22) 100%),
+    linear-gradient(167deg, #EDF4FE 0%, #E1EBFB 55%, #D5E3F8 100%);
+  /* 按下去：光被皮肤挡掉，只剩阴影堆在里侧 */
+  --xtal-down:
+    inset 0 3px 7px rgba(78, 114, 172, .42),
+    inset 0 12px 16px -12px rgba(78, 114, 172, .28),
+    inset 0 -1px 0 rgba(255, 255, 255, .70),
+    0 1px 0 rgba(255, 255, 255, .50);
+  /* 主色水晶 */
+  --xtal-primary-face:
+    linear-gradient(180deg, rgba(255, 255, 255, .50) 0%, rgba(255, 255, 255, .12) 20%, rgba(255, 255, 255, 0) 44%),
+    linear-gradient(167deg, #8FA9FC 0%, #6C8BF5 52%, #5573E4 100%);
+  --xtal-primary-up:
+    inset 0 1px 0 rgba(255, 255, 255, .72),
+    inset 0 -3px 0 rgba(38, 58, 132, .42),
+    inset 0 -5px 6px rgba(38, 58, 132, .22),
+    0 1px 1px rgba(70, 96, 178, .32),
+    0 5px 12px -3px rgba(74, 104, 200, .42),
+    0 12px 22px -10px rgba(74, 104, 200, .40);
+  /* 主色按下：蓝面本身压深，才不会“看着还是亮的” */
+  --xtal-primary-sunk:
+    linear-gradient(180deg, rgba(255, 255, 255, .18) 0%, rgba(18, 34, 88, .10) 42%, rgba(18, 34, 88, .20) 100%),
+    linear-gradient(167deg, #6A87ED 0%, #5A77DF 55%, #4A66D0 100%);
+  --xtal-primary-down:
+    inset 0 3px 7px rgba(32, 52, 120, .46),
+    inset 0 -1px 0 rgba(255, 255, 255, .34),
+    0 1px 0 rgba(255, 255, 255, .40);
+}
+
+/* ---------- 一律先立起来 ---------- */
+.btn,
+.icon-btn,
+.chip,
+.kw-chip,
+.kw-cand,
+.wk-chip,
+.sh-week,
+.sw-day,
+.ft-btn,
+.nav-fold,
+.section-link,
+.fab,
+.fab-sub {
+  background-image: var(--xtal-face);
+  background-color: rgba(255, 255, 255, .82);
+  border: 1px solid var(--xtal-edge);
+  border-bottom-color: var(--xtal-rim);
+  border-right-color: var(--xtal-rim);
+  box-shadow: var(--xtal-up);
+  transition:
+    transform .13s cubic-bezier(.2, .85, .3, 1.2),
+    box-shadow .13s ease,
+    background-color .16s ease,
+    color .16s ease;
+}
+
+/* 小签：投影收一半，免得一排小按键看起来像浮起来一堆 */
+.chip, .kw-chip, .kw-cand, .wk-chip {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -2px 0 rgba(182, 204, 234, .46),
+    inset 0 -3px 4px rgba(163, 192, 228, .18),
+    0 1px 1px rgba(96, 132, 190, .16),
+    0 3px 7px -3px rgba(96, 132, 190, .24);
+}
+
+/* ---------- 按下 / 选中：内凹 ---------- */
+.btn:active,
+.icon-btn:active,
+.chip:active,
+.kw-chip:active,
+.wk-chip:active,
+.sh-week:active,
+.sw-day:active,
+.ft-btn:active,
+.nav-item:active,
+.nav-fold:active,
+.section-link:active,
+.fab:active {
+  transform: translateY(1px);
+  background-image: var(--xtal-face-sunk);
+  box-shadow: var(--xtal-down);
+}
+.btn:active, .icon-btn:active, .ft-btn:active, .fab:active { transform: translateY(1px) scale(.985); }
+
+/* 选中态：按进去的样子，但颜色各自保留 */
+.chip.on,
+.kw-chip.on,
+.wk-chip.on,
+.sw-day.sel,
+.icon-btn.toggle.on,
+.nav-item.on,
+.nav-item.on:hover {
+  background-image: var(--xtal-face-sunk);
+  box-shadow: var(--xtal-down);
+}
+
+/* 主色按键：水晶蓝。
+   「主按钮 / 悬浮球」是待按的键 → 立起来；
+   「已选中的周次 / 词签」是已经按下去的键 → 内凹。 */
+.btn.primary,
+.btn.danger.solid,
+.fab {
+  background-image: var(--xtal-primary-face);
+  border-color: rgba(255, 255, 255, .58);
+  border-bottom-color: rgba(42, 66, 150, .46);
+  border-right-color: rgba(42, 66, 150, .30);
+  box-shadow: var(--xtal-primary-up);
+  color: #fff;
+}
+.wk-chip.on,
+.kw-chip.on,
+.chip.on {
+  background-image: var(--xtal-primary-sunk);
+  border-color: rgba(255, 255, 255, .40);
+  border-bottom-color: rgba(42, 66, 150, .34);
+  box-shadow: var(--xtal-primary-down);
+  color: #fff;
+}
+.btn.primary:active,
+.btn.danger.solid:active,
+.fab:active,
+.wk-chip.on:active,
+.kw-chip.on:active,
+.chip.on:active {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, .28) 0%, rgba(255, 255, 255, 0) 40%),
+    linear-gradient(167deg, #6E8CF3 0%, #5B79E2 55%, #4A66D0 100%);
+  box-shadow: var(--xtal-primary-down);
+}
+.btn.primary:active, .fab:active { transform: translateY(1px) scale(.985); }
+.wk-chip.on:active, .kw-chip.on:active, .chip.on:active { transform: translateY(0); }
+
+/* 「本周」这枚当前周次签用的是浅底，补一层水晶高光盖回简写清掉的渐变 */
+.wk-chip.cur {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, .88) 0%, rgba(255, 255, 255, .40) 20%, rgba(255, 255, 255, 0) 46%),
+    linear-gradient(167deg, #FFFFFF 0%, #F3F8FF 58%, #E4EEFE 100%);
+}
+
+/* 周条选中但非今天：淡蓝底 + 内凹，一眼看出“按下的是这格” */
+.sw-day.sel {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, .42) 0%, rgba(206, 222, 246, .30) 40%, rgba(196, 214, 242, .20) 100%),
+    linear-gradient(167deg, #DFE9FC 0%, #D2E0FA 60%, #C4D5F5 100%);
+  border-color: rgba(255, 255, 255, .95);
+  border-bottom-color: rgba(150, 178, 226, .55);
+  color: var(--primary);
+}
+.sw-day.sel em, .sw-day.sel b { color: var(--primary-2); }
+/* 今天始终是“亮着”的那一格：抬起来 + 主色，不参与内凹 */
+.sw-day.today,
+.sw-day.today.sel {
+  background-image: var(--xtal-primary-face);
+  border-color: rgba(255, 255, 255, .46);
+  border-bottom-color: rgba(42, 66, 150, .40);
+  color: rgba(255, 255, 255, .92);
+  transform: translateY(-2px) scale(1.07);
+  box-shadow: var(--xtal-primary-up);
+}
+.sw-day.today b { color: #fff; }
+.sw-day.today em { color: rgba(255, 255, 255, .95); }
+.sw-day.today:active, .sw-day.today.sel:active { transform: translateY(-1px) scale(1.05); }
+
+/* 描边按钮（幽灵 / 纯文字）不铺水晶面，只给反馈 */
+.btn.ghost {
+  background-image: none;
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--primary);
+}
+.btn.ghost:active { box-shadow: var(--xtal-down); }
+
+/* 页脚小按钮与圆图标：厚度再轻一点，避免糊成一团 */
+.icon-btn { box-shadow: var(--xtal-up); }
+.fab { box-shadow: var(--xtal-primary-up); }
+.fab-sub {
+  background-image: var(--xtal-face);
+  box-shadow: var(--xtal-up);
+}
+.fab-sub:active { box-shadow: var(--xtal-down); }
+
+/* 「＋ 编辑关键词」保留淡蓝底，只叠一层水晶高光 */
+.kw-chip.add {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, .74) 0%, rgba(255, 255, 255, .22) 20%, rgba(255, 255, 255, 0) 46%),
+    linear-gradient(167deg, #E8F0FF 0%, #D8E4FE 100%);
+  color: var(--primary-2);
+  border-color: rgba(255, 255, 255, .96);
+  border-bottom-color: rgba(166, 190, 232, .5);
+}
+
+/* 分区右侧的文字链：做成小水晶片，但仍以文字为主 */
+.section-link {
+  padding: 3px 8px 3px 10px;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, .72);
+}
+
+/* 遮罩/蒙层上的按钮不参与反光，保持安静 */
+.overlay .btn, .modal-card .btn.ghost { box-shadow: none; }
+
+/* ---------- 课表：关键词行折叠 ---------- */
+.kw-fold { margin: 10px 0 2px; }
+.kw-fold-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px 0 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  background-image: var(--xtal-face);
+  border: 1px solid var(--xtal-edge);
+  border-bottom-color: var(--xtal-rim);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -2px 0 rgba(182, 204, 234, .46),
+    0 1px 1px rgba(96, 132, 190, .16),
+    0 3px 7px -3px rgba(96, 132, 190, .24);
+  transition: box-shadow .13s ease, transform .13s ease;
+}
+.kw-fold-head:active { transform: translateY(1px); box-shadow: var(--xtal-down); }
+.kw-fold .kf-title { color: var(--text-3); letter-spacing: .4px; }
+.kw-fold .kf-cur {
+  max-width: 44vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary-2);
+}
+.kw-fold .kf-chev {
+  display: inline-flex;
+  transform: rotate(90deg);
+  transition: transform .2s ease;
+  opacity: .6;
+}
+.kw-fold .kf-chev svg { width: 12px; height: 12px; }
+.kw-fold.open .kf-chev { transform: rotate(-90deg); }
+.kw-fold .sched-kwline { display: none; }
+.kw-fold.open .sched-kwline { display: flex; }
+
+/* 「第 N 周 编辑」：文字换成一个很轻的小铅笔 */
+.sh-week { display: inline-flex; align-items: center; gap: 3px; }
+.sh-week-ico { display: inline-flex; align-items: center; opacity: .42; transition: opacity .16s ease; }
+.sh-week-ico svg { width: 11px; height: 11px; }
+.sh-week:hover .sh-week-ico, .sh-week:focus-visible .sh-week-ico { opacity: .78; }
+
+/* 减少动态效果：不位移，只换阴影 */
+@media (prefers-reduced-motion: reduce) {
+  .btn:active, .icon-btn:active, .chip:active, .kw-chip:active, .wk-chip:active,
+  .sh-week:active, .sw-day:active, .ft-btn:active, .nav-item:active, .nav-fold:active,
+  .section-link:active, .fab:active, .kw-fold-head:active {
+    transform: none;
+  }
+  .sw-day.today, .sw-day.today:active, .sw-day.today.sel:active { transform: none; }
+  .btn, .icon-btn, .chip, .kw-chip, .wk-chip, .sw-day, .sh-week, .kw-fold-head { transition: box-shadow .13s ease; }
+}
+
+/* 补齐剩下几类小按键：待办卡里的动作键、备忘录加号、筛选词小签、关键词选择键 */
+.memo-act,
+.memo-add-btn,
+.fchip,
+.kw-btn {
+  background-image: var(--xtal-face);
+  background-color: rgba(255, 255, 255, .82);
+  border: 1px solid var(--xtal-edge);
+  border-bottom-color: var(--xtal-rim);
+  border-right-color: var(--xtal-rim);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -2px 0 rgba(182, 204, 234, .46),
+    0 1px 1px rgba(96, 132, 190, .16),
+    0 3px 7px -3px rgba(96, 132, 190, .24);
+  transition: transform .13s cubic-bezier(.2, .85, .3, 1.2), box-shadow .13s ease, color .16s ease;
+}
+.memo-act:active,
+.memo-add-btn:active,
+.fchip:active,
+.kw-btn:active {
+  transform: translateY(1px);
+  background-image: var(--xtal-face-sunk);
+  box-shadow: var(--xtal-down);
+}
+.fchip.on, .kw-btn.on {
+  background-image: var(--xtal-primary-face);
+  border-color: rgba(255, 255, 255, .46);
+  border-bottom-color: rgba(42, 66, 150, .40);
+  box-shadow: var(--xtal-primary-down);
+  color: #fff;
+}
+@media (prefers-reduced-motion: reduce) {
+  .memo-act:active, .memo-add-btn:active, .fchip:active, .kw-btn:active { transform: none; }
+}
