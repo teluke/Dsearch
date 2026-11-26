@@ -343,6 +343,12 @@
     await db.settings.put({ key: key, value: value });
   }
 
+  /* 多个设置一次事务写完，省掉多次 IndexedDB 往返 */
+  async function setSettings(map) {
+    const rows = Object.keys(map || {}).map(function (k) { return { key: k, value: map[k] }; });
+    if (rows.length) await db.settings.bulkPut(rows);
+  }
+
   async function allSettings() {
     return db.settings.toArray();
   }
@@ -470,6 +476,7 @@
     folderUsage: folderUsage,
     getSetting: getSetting,
     setSetting: setSetting,
+    setSettings: setSettings,
     allSettings: allSettings,
     storageInfo: storageInfo,
     storageEstimate: storageEstimate,

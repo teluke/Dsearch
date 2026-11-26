@@ -13,7 +13,8 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [] },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null },
+    loaded: false,
     memoEditId: null,
     docs: [],
     series: [],
@@ -36,6 +37,7 @@
 
   async function loadAll() {
     state.docs = await DB.allDocuments();
+    clearScheduleCache();
     state.series = await DB.listSeries();
     try { state.folders = await DB.listFolders(); } catch (e) { state.folders = []; }
     try { state.kwPinned = (await DB.getSetting('kwPinned', [])) || []; } catch (e) { state.kwPinned = []; }
@@ -68,20 +70,24 @@
       sc.docIds = kept.length ? kept : (allowed.length ? [allowed[0].id] : []);
       if (sc.docIds.indexOf(sc.previewId) < 0) sc.previewId = sc.docIds[0] || null;
     } catch (e) { /* 课表设置损坏时用默认值 */ }
+    state.loaded = true;
   }
 
   async function saveSchedule() {
     const sc = state.schedule;
-    await DB.setSetting('scheduleDocIds', sc.docIds);
-    await DB.setSetting('scheduleKeywords', sc.keywords);
-    await DB.setSetting('scheduleWeek', sc.week);
-    await DB.setSetting('scheduleCourses', sc.courses);
-    await DB.setSetting('scheduleUseAuto', sc.useAuto);
-    await DB.setSetting('schedulePreviewId', sc.previewId);
-    await DB.setSetting('scheduleSeriesName', sc.seriesName);
-    await DB.setSetting('scheduleFieldKeywords', sc.fieldKeywords || defaultFieldKeywords());
-    await DB.setSetting('scheduleActiveKeywords', sc.activeKeywords || []);
-    await DB.setSetting('scheduleActiveKeyword', (sc.activeKeywords || [])[0] || '');
+    /* 一次事务写完，避免十次 indexDB 往返 */
+    await DB.setSettings({
+      scheduleDocIds: sc.docIds,
+      scheduleKeywords: sc.keywords,
+      scheduleWeek: sc.week,
+      scheduleCourses: sc.courses,
+      scheduleUseAuto: sc.useAuto,
+      schedulePreviewId: sc.previewId,
+      scheduleSeriesName: sc.seriesName,
+      scheduleFieldKeywords: sc.fieldKeywords || defaultFieldKeywords(),
+      scheduleActiveKeywords: sc.activeKeywords || [],
+      scheduleActiveKeyword: (sc.activeKeywords || [])[0] || ''
+    });
   }
 
   async function saveEventOverrides() {
@@ -1001,6 +1007,21 @@
     return (d.getDay() + 6) % 7;
   }
 
+  /* 一周从周一开始：周条与日期换算都基于它 */
+  function mondayOf(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    d.setDate(d.getDate() - weekdayIndex(iso));
+    return d;
+  }
+  function dateOffset(base, n) {
+    const d = new Date(base.getTime());
+    d.setDate(d.getDate() + n);
+    return d;
+  }
+  function mdOf(d) {
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+
   function numFromCn(s) {
     if (!s) return '';
     if (/^\d+$/.test(s)) return parseInt(s, 10);
@@ -1037,6 +1058,111 @@
 
   function scheduleTextOf(d) {
     return [d.fullText, d.ocrText, d.note].filter(Boolean).join('\n');
+  }
+
+  /* 同一份课表在一次渲染里会被读好几次（提取、关键词行、周次范围），
+     解析结果按「文件 id + 文本长度」缓存，避免反复切行、找表头 */
+  const parsedCache = new Map();
+  let kwRowsMemo = null;
+  let maxWeekMemo = null;
+  function scheduleParsed(d) {
+    const text = scheduleTextOf(d);
+    if (!text) return { lines: [], header: null, head: null };
+    const key = d.id + '|' + text.length;
+    const hit = parsedCache.get(key);
+    if (hit) return hit;
+    const lines = text.split(/\r?\n/);
+    const header = scheduleHeaderMap(lines);
+    const parsed = { lines: lines, header: header, head: header ? splitScheduleCells(lines[header.row]) : null };
+    if (parsedCache.size >= 6) parsedCache.clear();
+    parsedCache.set(key, parsed);
+    return parsed;
+  }
+  function clearScheduleCache() {
+    parsedCache.clear();
+    kwRowsMemo = null;
+    maxWeekMemo = null;
+  }
+
+  /* 周次区间：认「11-14」「第1-16周」「1-16周(单)」「单周/双周」。
+     loose=true 表示值来自「周次」列，可以不带「周」字；否则必须是周次语义，
+     免得把「第5-6节」当成教学周。 */
+  function parseWeekRange(text, loose) {
+    const t = String(text == null ? '' : text).replace(/\s/g, '');
+    if (!t || t.length > 40) return null;
+    const hasWeek = t.indexOf('周') >= 0;
+    if (!loose && (!hasWeek || /节/.test(t))) return null;
+    const single = /单周|单\)|（单）/.test(t);
+    const double = /双周|双\)|（双）/.test(t);
+    const parity = single ? 1 : (double ? 2 : 0);
+    const span = t.match(/(\d{1,2})\s*[-~—至]\s*(\d{1,2})/);
+    if (span) {
+      const a = parseInt(span[1], 10);
+      const b = parseInt(span[2], 10);
+      if (a > 0 && b >= a && b <= 30) return { from: a, to: b, parity: parity };
+    }
+    /* 「1,3,5周」这种列举式：取首尾当区间 */
+    if (/^[\d,，、]+周?$/.test(t)) {
+      const nums = t.replace(/周$/, '').split(/[,，、]/)
+        .map(function (x) { return parseInt(x, 10); })
+        .filter(function (n) { return n > 0 && n <= 30; });
+      if (nums.length) return { from: Math.min.apply(null, nums), to: Math.max.apply(null, nums), parity: parity };
+    }
+    const one = t.match(/第?(\d{1,2})周/);
+    if (one) {
+      const n = parseInt(one[1], 10);
+      if (n > 0 && n <= 30) return { from: n, to: n, parity: parity };
+    }
+    return parity ? { from: 1, to: 30, parity: parity } : null;
+  }
+  function weekRangeOf(c) {
+    const fields = c.fields || [];
+    for (let i = 0; i < fields.length; i++) {
+      if (!/周次|周数|起止周|上课周|单双周/.test(String(fields[i].label || ''))) continue;
+      const r = parseWeekRange(fields[i].value, true);
+      if (r) return r;
+    }
+    return parseWeekRange(c.dayText, false);
+  }
+  function courseInWeek(c, week) {
+    if (!week) return true;
+    if (c.weekSpan === undefined) c.weekSpan = weekRangeOf(c);
+    const r = c.weekSpan;
+    if (!r) return true;
+    if (week < r.from || week > r.to) return false;
+    if (r.parity === 1 && week % 2 === 0) return false;
+    if (r.parity === 2 && week % 2 !== 0) return false;
+    return true;
+  }
+  /* 课表里出现过的最大教学周，用来生成周次按键（没有就沿用当前周） */
+  function scheduleMaxWeek(docs) {
+    const key = docs.map(function (d) { return d.id; }).join(',');
+    if (maxWeekMemo && maxWeekMemo.key === key) return maxWeekMemo.value;
+    let max = 0;
+    docs.forEach(function (d) {
+      const p = scheduleParsed(d);
+      const col = p.head ? headerColumn(p.head, ['上课周次', '周次', '起止周', '周数', '单双周']) : -1;
+      p.lines.forEach(function (ln, idx) {
+        if (p.header && idx === p.header.row) return;
+        const s = String(ln || '').trim();
+        if (!s || s.length > 2000) return;
+        let src = s;
+        if (col >= 0) {
+          const cells = splitScheduleCells(s);
+          src = cells[col] || '';
+        }
+        const r = parseWeekRange(src, col >= 0);
+        if (r && r.to > max) max = r.to;
+      });
+    });
+    maxWeekMemo = { key: key, value: Math.max(max, 1) };
+    return maxWeekMemo.value;
+  }
+  function scheduleKeywordRowsCached(words) {
+    const key = (state.schedule.docIds || []).join(',') + '#' + words.join('|');
+    if (kwRowsMemo && kwRowsMemo.key === key) return kwRowsMemo.value;
+    kwRowsMemo = { key: key, value: scheduleKeywordRows(words) };
+    return kwRowsMemo.value;
   }
 
   /* 工号、学号、电话、邮箱等不进课表，避免把隐私信息显示或保存下来 */
@@ -1291,11 +1417,11 @@
     };
 
     docs.forEach(function (d) {
-      const text = scheduleTextOf(d);
-      if (!text) return;
-      const lines = text.split(/\r?\n/);
-      const header = scheduleHeaderMap(lines);
-      const headCells = header ? splitScheduleCells(lines[header.row]) : null;
+      const parsed = scheduleParsed(d);
+      const lines = parsed.lines;
+      if (!lines.length) return;
+      const header = parsed.header;
+      const headCells = parsed.head;
       /* 先用整张表的数据行建立「关键词 → 列号」，值型关键词也能定位到列 */
       const allRows = lines.map(function (ln, idx) {
         return (header && idx === header.row) ? null : splitScheduleCells(ln);
@@ -1480,6 +1606,11 @@
   function currentScheduleKeyword() {
     return currentScheduleKeywords()[0] || '';
   }
+  /* 当前查看的那一天：没手动点过就是今天 */
+  function scheduleDayIndex(todayStr) {
+    const i = state.schedule.day;
+    return (i == null || i < 0 || i > 6) ? weekdayIndex(todayStr) : i;
+  }
 
   /* 手动编辑或历史数据没有 hits 时，在分类字段和显示值里兜底匹配 */
   function courseTextMatchesKeyword(c, w) {
@@ -1502,32 +1633,45 @@
     return list.every(function (k) { return courseTextMatchesKeyword(c, k); });
   }
 
+  /* 课表页：周条选日期、周次按键选周，课程按「选中日 + 选中周」过滤 */
   function scheduleHtml(todayStr) {
     const sc = state.schedule;
     const docs = scheduleSelectedDocs();
-    const dayIdx = weekdayIndex(todayStr);
-    const dt = new Date(todayStr + 'T00:00:00');
-    const md = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
+    const todayIdx = weekdayIndex(todayStr);
+    const dayIdx = sc.day == null ? todayIdx : sc.day;
+    const isToday = dayIdx === todayIdx;
+    const curWeek = (sc.week == null || sc.week === '') ? 1 : sc.week;
+    const week = sc.viewWeek || curWeek;
+    const sameAsToday = isToday && week === curWeek;
+    const monday = mondayOf(todayStr);
+    const dayDate = dateOffset(monday, dayIdx);
     const activeKws = currentScheduleKeywords();
     const kwMode = activeKws.length > 0;
 
     /* 选中关键词时直接展示原表里命中这些关键词的横向行，
        数据和「查看原表」面板同源，避免两边各算一份对不上。
        表头识别不出来时退回按当天提取的结果，只做关键词筛选。 */
-    const auto = extractCourses(docs, sc.keywords, dayIdx, sc.fieldKeywords);
-    const base = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
-    const view = kwMode ? keywordRowsView(scheduleKeywordRows(activeKws), dayIdx, activeKws) : null;
-    /* 今天手动改过课程时以手改为准，不再用原表行覆盖 */
-    const manualToday = !sc.useAuto && !!(((sc.courses || {})[dayIdx]) || []).length;
-    const rowMode = !!(kwMode && view && view.cols.length && !manualToday);
-    const courses = rowMode ? view.courses
-      : (kwMode ? base.filter(function (c) { return courseMatchesKeywords(c, activeKws); }) : base);
-    const todayCourses = rowMode ? courses.filter(function (c) { return c.today; }) : courses;
-    const week = (sc.week == null || sc.week === '') ? 1 : sc.week;
+    const view = kwMode ? keywordRowsView(scheduleKeywordRowsCached(activeKws), dayIdx, activeKws) : null;
+    /* 这一天手动改过课程时以手改为准，不再用原表行覆盖 */
+    const manual = !sc.useAuto && !!(((sc.courses || {})[dayIdx]) || []).length;
+    const rowMode = !!(view && view.cols.length && !manual);
+    let courses;
+    if (rowMode) {
+      courses = view.courses;
+    } else {
+      const auto = extractCourses(docs, sc.keywords, dayIdx, sc.fieldKeywords);
+      const base = sc.useAuto ? auto : (((sc.courses || {})[dayIdx]) || auto);
+      courses = kwMode ? base.filter(function (c) { return courseMatchesKeywords(c, activeKws); }) : base;
+    }
+    /* 按选中周次过滤；一条都对不上时宁可全列出来，也不给空白页 */
+    const inWeek = courses.filter(function (c) { return courseInWeek(c, week); });
+    const weekEmpty = courses.length > 0 && inWeek.length === 0;
+    if (inWeek.length) courses = inWeek;
+    const dayCourses = rowMode ? courses.filter(function (c) { return c.today; }) : courses;
 
     const courseHtml = courses.length
       ? (rowMode
-        ? courses.map(function (c, i) { return kwCourseCardHtml(c, i); }).join('')
+        ? courses.map(function (c, i) { return kwCourseCardHtml(c, i, sameAsToday); }).join('')
         : courses.map(function (c, i) {
           const allFields = (c.fields && c.fields.length ? c.fields : fallbackFields(c))
             .filter(function (f) {
@@ -1555,19 +1699,39 @@
             '<span class="sc-no">' + (i + 1) + '</span>' +
             '</div>';
         }).join(''))
-      : emptyBlock(kwMode ? '没有找到对应的课程行' : '今天没有识别到课程', docs.length
+      : emptyBlock(kwMode ? '没有找到对应的课程行' : SCHEDULE_DAYS[dayIdx] + '没有课', docs.length
         ? (kwMode
           ? '关键词「' + esc(activeKws.join(' + ')) + '」在原表里没有命中任何行，点「查看原表」核对表头写法'
           : '点「编辑课程」手动填写，或检查关键词设置')
         : '先点右上角文件图标加入课表文件');
 
-    const summaryHtml = rowMode ? kwSummaryHtml(view, activeKws, todayCourses, courses) : '';
+    const summaryHtml = rowMode ? kwSummaryHtml(view, activeKws, dayCourses, courses, {
+      isToday: sameAsToday, week: week, dayLabel: sameAsToday ? '今天' : SCHEDULE_DAYS[dayIdx]
+    }) : '';
+    const dayWord = sameAsToday ? '今日' : '当天';
     const countText = rowMode
-      ? courses.length + ' 节 · ' + (todayCourses.length ? '今日 ' + todayCourses.length + ' 节' : '今日无课')
+      ? courses.length + ' 节 · ' + (dayCourses.length ? dayWord + ' ' + dayCourses.length + ' 节' : dayWord + '无课')
       : courses.length + ' 节 · ' + (kwMode ? '关键词「' + activeKws.join(' + ') + '」' : (sc.useAuto ? '自动提取' : '手动编辑'));
 
+    /* 周条：本周 7 天的日期与星期，今天默认放大高亮 */
+    let daysHtml = '';
+    for (let i = 0; i < 7; i++) {
+      const d = dateOffset(monday, i);
+      daysHtml += '<button class="sw-day' + (i === dayIdx ? ' sel' : '') + (i === todayIdx ? ' today' : '') +
+        '" data-sched-day="' + i + '" type="button" aria-pressed="' + (i === dayIdx ? 'true' : 'false') +
+        '" aria-label="' + SCHEDULE_DAYS[i] + ' ' + mdOf(d) + (i === todayIdx ? ' 今天' : '') + '">' +
+        '<em>' + SCHEDULE_DAYS[i].slice(1) + '</em><b>' + d.getDate() + '</b></button>';
+    }
+    const maxWeek = Math.min(30, Math.max(scheduleMaxWeek(docs), curWeek, week));
+    let weekChips = '<button class="wk-chip cur" data-sched-week-pick="' + curWeek +
+      '" type="button" title="当前教学周">本周</button>';
+    for (let w = 1; w <= maxWeek; w++) {
+      weekChips += '<button class="wk-chip' + (w === week ? ' on' : '') + '" data-sched-week-pick="' + w +
+        '" type="button" aria-pressed="' + (w === week ? 'true' : 'false') + '">' + w + '</button>';
+    }
+
     return '<div class="topbar"><div>' +
-      '<p class="meta">今日课表 · ' + esc(todayStr) + '</p>' +
+      '<p class="meta">课表 · ' + esc(todayStr) + '</p>' +
       '<p class="sub">关键词提取后可直接用，也能手动改</p>' +
       '</div><div class="topbar-actions">' +
       '<button class="icon-btn neu press" data-sched-docs type="button" aria-label="选择课表文件" title="选择课表文件">' + UI.icon('file') + '</button>' +
@@ -1575,10 +1739,18 @@
       '<button class="icon-btn neu press toggle' + (sc.useAuto ? '' : ' on') + '" data-sched-mode type="button" aria-label="切换提取或编辑" title="切换提取或编辑">' + UI.icon('edit') + '</button>' +
       '</div></div>' +
       '<div class="sched-hero neu">' +
-      '<div class="sh-day">' + SCHEDULE_DAYS[dayIdx] + '</div>' +
-      '<div class="sh-meta"><span class="sh-date">' + md + '</span>' +
-      '<button class="sh-week" data-sched-week type="button">第 ' + esc(String(week)) + ' 周 <i>编辑</i></button></div>' +
+      '<div class="sh-top"><div class="sh-main">' +
+      '<b class="sh-day">' + SCHEDULE_DAYS[dayIdx] + '</b>' +
+      '<span class="sh-date">' + mdOf(dayDate) + '</span>' +
+      (isToday ? '<i class="sh-today">今天</i>' : '') +
       '</div>' +
+      '<button class="sh-week' + (week === curWeek ? '' : ' off') + '" data-sched-week type="button">第 ' + esc(String(curWeek)) + ' 周 <i>编辑</i></button>' +
+      '</div>' +
+      '<div class="sw-days">' + daysHtml + '</div>' +
+      '<p class="sw-range">' + mdOf(monday) + ' - ' + mdOf(dateOffset(monday, 6)) + '</p>' +
+      '</div>' +
+      '<div class="week-strip" role="group" aria-label="按周次查看课程">' +
+      '<span class="ws-label">周次</span><div class="ws-scroll">' + weekChips + '</div></div>' +
       '<div class="sched-kwline">' +
       (sc.keywords || []).slice(0, 14).map(function (k, i) {
         const on = activeKws.indexOf(k) >= 0;
@@ -1588,10 +1760,12 @@
       }).join('') +
       '<button class="kw-chip add" data-sched-kw type="button">＋ 编辑关键词</button>' +
       '</div>' +
-      '<div class="section-title"><span>今日课程</span><span class="title-side">' +
+      '<div class="section-title"><span>' + esc(sameAsToday ? '今日课程' : SCHEDULE_DAYS[dayIdx] + ' · 第 ' + week + ' 周') + '</span><span class="title-side">' +
       '<span class="count">' + esc(countText) + '</span>' +
       (kwMode ? '<button class="section-link" data-sched-kw-rows type="button" title="查看选中关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
       '</span></div>' +
+      (weekEmpty ? '<p class="sched-weekhint">这一天的课周次对不上第 ' + week +
+        ' 周，先按全部列出；点右上「第 ' + curWeek + ' 周 编辑」改成实际教学周即可对上</p>' : '') +
       summaryHtml +
       '<div class="sched-list' + (rowMode ? ' kwc-list' : '') + '">' + courseHtml + '</div>' +
       '<div class="sched-actions">' +
@@ -1702,9 +1876,10 @@
     const docs = scheduleSelectedDocs();
     if (!list.length || !docs.length) return out;
     docs.forEach(function (d) {
-      const lines = scheduleTextOf(d).split(/\r?\n/);
-      const header = scheduleHeaderMap(lines);
-      if (header && !out.head.length) out.head = splitScheduleCells(lines[header.row]);
+      const parsed = scheduleParsed(d);
+      const lines = parsed.lines;
+      const header = parsed.header;
+      if (header && !out.head.length) out.head = parsed.head.slice();
       const dataRows = [];
       lines.forEach(function (line, idx) {
         if (header && idx === header.row) return;
@@ -1858,8 +2033,10 @@
     return label;
   }
 
-  function kwSummaryHtml(view, activeKws, todayCourses, allCourses) {
+  function kwSummaryHtml(view, activeKws, todayCourses, allCourses, ctx) {
     if (!view) return '';
+    const c = ctx || {};
+    const dayLabel = c.dayLabel || '今天';
     const subject = (activeKws || []).map(function (w) {
       const label = keywordColumnLabel(view, w);
       return (label ? label + '「' + w + '」' : '关键词「' + w + '」');
@@ -1871,18 +2048,19 @@
     });
     const detail = todayCourses.length
       ? '当日课程：' + parts.join('；')
-      : '今天没有排课' + (allCourses.length ? '，下面按原表顺序列出全部 ' + allCourses.length + ' 节' : '');
+      : dayLabel + '没有排课' + (allCourses.length ? '，下面按原表顺序列出该关键词的全部 ' + allCourses.length + ' 节' : '');
     const rest = allCourses.length > todayCourses.length
       ? '<p class="kws-all">该关键词在原表共 ' + allCourses.length + ' 行，其他日期 ' +
         (allCourses.length - todayCourses.length) + ' 行一并列在下方</p>'
       : '';
+    const scope = (c.isToday ? '今日' : '本周') + ' ' + todayCourses.length + ' 节 / 共 ' + allCourses.length + ' 节';
     return '<div class="sched-kwsum neu">' +
-      '<p class="kws-title"><b>' + esc(subject) + '</b><span>今日 ' + todayCourses.length + ' 节 / 共 ' + allCourses.length + ' 节</span></p>' +
+      '<p class="kws-title"><b>' + esc(subject) + '</b><span>' + esc(scope) + '</span></p>' +
       '<p class="kws-line">' + esc(detail) + '</p>' + rest +
       '</div>';
   }
 
-  function kwCourseCardHtml(c, i) {
+  function kwCourseCardHtml(c, i, sameAsToday) {
     const period = /^\d/.test(String(c.period)) ? '第 ' + c.period + ' 节' : c.period;
     const grid = c.fields.length
       ? '<dl class="kwc-grid">' + c.fields.map(function (f) {
@@ -1895,7 +2073,7 @@
       '<div class="kwc-head">' +
       '<span class="sc-period">' + esc(String(period)) + '</span>' +
       '<b>' + esc(String(c.name)) + '</b>' +
-      (c.today ? '<span class="kwc-today">今日</span>' : '') +
+      (c.today ? '<span class="kwc-today">' + (sameAsToday ? '今日' : '当天') + '</span>' : '') +
       '<span class="kwc-no">' + (i + 1) + '</span>' +
       '</div>' + grid +
       '</div>';
@@ -1907,7 +2085,7 @@
     if (!words.length) return;
     const docs = scheduleSelectedDocs();
     if (!docs.length) { UI.toast('先点右上角文件图标加入课表文件'); return; }
-    const collected = scheduleKeywordRows(words);
+    const collected = scheduleKeywordRowsCached(words);
     let head = collected.head;
     const rows = collected.rows;
     if (!rows.length) { UI.toast('课表里没有找到「' + words.join(' + ') + '」对应的表格行'); return; }
@@ -1981,6 +2159,7 @@
           if (!e.target.closest('[data-sched-week-save]')) return;
           const v = parseInt(body.querySelector('#schedWeekInput').value, 10);
           state.schedule.week = (v > 0 && v <= 60) ? v : 1;
+          state.schedule.viewWeek = null;
           saveSchedule().then(function () { UI.closeDrawer(); render('schedule'); });
         };
       });
@@ -4261,6 +4440,12 @@
     const section = document.getElementById('view-' + state.tab);
     if (!section) return;
 
+    /* 重绘前先放掉上一张预览图的 objectURL，避免旧图一直占内存 */
+    if (state.schedule.objUrl) {
+      URL.revokeObjectURL(state.schedule.objUrl);
+      state.schedule.objUrl = null;
+    }
+
     if (state.tab === 'home') section.innerHTML = await homeHtml(DB.todayISO());
     else if (state.tab === 'schedule') section.innerHTML = scheduleHtml(DB.todayISO());
     else if (state.tab === 'archive') section.innerHTML = archiveHtml();
@@ -4274,6 +4459,44 @@
 
     bindChips(section);
     bind(section);
+    if (state.tab === 'schedule') {
+      centerWeekStrip(section);
+      mountSchedulePreview(section);
+    }
+  }
+
+  /* 周次条默认滚到选中那一周，手机上不用自己找 */
+  function centerWeekStrip(section) {
+    const scroll = section.querySelector('.ws-scroll');
+    const on = scroll && scroll.querySelector('.wk-chip.on');
+    if (!scroll || !on) return;
+    scroll.scrollLeft = on.offsetLeft - scroll.clientWidth / 2 + on.offsetWidth / 2;
+  }
+
+  /* 只换课表内容：点日期、切周次、点关键词都走这里。
+     已经渲染好的文件预览（图片 objectURL / PDF canvas）原样搬过去，
+     不重跑一次 PDF 渲染，切换手感更轻。 */
+  async function renderScheduleOnly() {
+    const section = document.getElementById('view-schedule');
+    if (!section) return;
+    const stage = section.querySelector('#schedStage');
+    let keepDoc = null;
+    let keepKids = null;
+    if (stage && !stage.querySelector('.sf-empty')) {
+      keepDoc = stage.getAttribute('data-doc');
+      keepKids = Array.prototype.slice.call(stage.childNodes);
+    }
+    section.innerHTML = scheduleHtml(DB.todayISO());
+    bindChips(section);
+    bind(section);
+    centerWeekStrip(section);
+    const next = keepDoc ? section.querySelector('#schedStage[data-doc="' + keepDoc + '"]') : null;
+    if (next && keepKids && keepKids.length) {
+      next.innerHTML = '';
+      keepKids.forEach(function (n) { next.appendChild(n); });
+    } else {
+      mountSchedulePreview(section);
+    }
   }
 
   function bind(section) {
@@ -4304,15 +4527,29 @@
         else cur.push(w);
         sc.activeKeywords = cur;
         await saveSchedule();
-        await render('schedule');
+        await renderScheduleOnly();
         return;
       }
       if (e.target.closest('[data-sched-kw]')) { await openScheduleKeywordEditor(); return; }
+      const dayBtn = e.target.closest('[data-sched-day]');
+      if (dayBtn) {
+        const i = parseInt(dayBtn.getAttribute('data-sched-day'), 10);
+        /* 点回今天就清掉手选，避免记住一个过期日期 */
+        state.schedule.day = i === weekdayIndex(DB.todayISO()) ? null : i;
+        await renderScheduleOnly();
+        return;
+      }
+      const weekBtn = e.target.closest('[data-sched-week-pick]');
+      if (weekBtn) {
+        state.schedule.viewWeek = parseInt(weekBtn.getAttribute('data-sched-week-pick'), 10) || null;
+        await renderScheduleOnly();
+        return;
+      }
       if (e.target.closest('[data-sched-week]')) { await openScheduleWeekEditor(); return; }
-      if (e.target.closest('[data-sched-edit]')) { await openScheduleCourseEdit(weekdayIndex(DB.todayISO())); return; }
+      if (e.target.closest('[data-sched-edit]')) { await openScheduleCourseEdit(scheduleDayIndex(DB.todayISO())); return; }
       if (e.target.closest('[data-sched-mode]')) {
         const sc = state.schedule;
-        const idx = weekdayIndex(DB.todayISO());
+        const idx = scheduleDayIndex(DB.todayISO());
         if (sc.useAuto) {
           sc.courses = sc.courses || {};
           sc.courses[idx] = extractCourses(scheduleSelectedDocs(), sc.keywords, idx, sc.fieldKeywords);
@@ -4878,17 +5115,18 @@
         });
       }
     }
-    if (tab === 'schedule') mountSchedulePreview(section);
   }
 
   async function refresh() {
+    state.loaded = false;
     await loadAll();
     await render(state.tab);
   }
 
   async function go(tab) {
     state.tab = tab;
-    await loadAll();
+    /* 数据在增删改后由 refresh() 重读；切标签只换视图，不再整库重读 */
+    if (!state.loaded) await loadAll();
     await render(tab);
   }
 

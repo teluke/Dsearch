@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.23.0';
+  window.APP_VERSION = '2.24.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -338,71 +338,7 @@
     } catch (e) { /* 后台任务失败静默 */ }
   }
 
-  /* 光标聚光灯：跟随鼠标/触点，并从背景照片对应位置取色 */
-  function bindSpotlight() {
-    const root = document.documentElement;
-    let raf = 0, x = -999, y = -999, touchTimer = 0, iw = 0, ih = 0;
-    const cv = document.createElement('canvas');
-    cv.width = 96; cv.height = 64;
-    const ctx = cv.getContext('2d', { willReadFrequently: true });
-    const bg = new Image();
-    bg.onload = function () {
-      iw = bg.naturalWidth;
-      ih = bg.naturalHeight;
-      if (ctx) ctx.drawImage(bg, 0, 0, cv.width, cv.height);
-    };
-    bg.src = 'assets/bg-jade.jpg';
-
-    /* background-size: cover 的反向映射，取当前落点下方照片的颜色 */
-    function sample(px, py) {
-      if (!ctx || !iw || !ih) return;
-      const vw = window.innerWidth, vh = window.innerHeight;
-      const scale = Math.max(vw / iw, vh / ih);
-      const ox = (vw - iw * scale) / 2, oy = (vh - ih * scale) / 2;
-      const ix = Math.round((px - ox) / scale / iw * cv.width);
-      const iy = Math.round((py - oy) / scale / ih * cv.height);
-      if (ix < 0 || iy < 0 || ix >= cv.width || iy >= cv.height) return;
-      let d;
-      try { d = ctx.getImageData(ix, iy, 1, 1).data; } catch (e) { return; }
-      /* 先提饱和再往白色提亮，颜色可见但不压低文字对比度 */
-      const lum = (d[0] + d[1] + d[2]) / 3, sat = 1.7;
-      const mix = function (v) {
-        const s = Math.max(0, Math.min(255, lum + (v - lum) * sat));
-        return Math.round(s * .55 + 255 * .45);
-      };
-      const r = mix(d[0]), g = mix(d[1]), b = mix(d[2]);
-      root.style.setProperty('--spot-rgb', r + ', ' + g + ', ' + b);
-    }
-    function apply() {
-      raf = 0;
-      root.style.setProperty('--spot-x', x + 'px');
-      root.style.setProperty('--spot-y', y + 'px');
-      sample(x, y);
-    }
-    function move(e) {
-      const p = e.touches && e.touches.length ? e.touches[0] : e;
-      if (!p || typeof p.clientX !== 'number') return;
-      x = p.clientX;
-      y = p.clientY;
-      root.classList.add('spot-on');
-      if (!raf) raf = requestAnimationFrame(apply);
-      if (e.type === 'touchstart' || e.type === 'touchmove') {
-        clearTimeout(touchTimer);
-        touchTimer = setTimeout(function () { root.classList.remove('spot-on'); }, 1800);
-      }
-    }
-    window.addEventListener('pointermove', move, { passive: true });
-    window.addEventListener('touchstart', move, { passive: true });
-    window.addEventListener('touchmove', move, { passive: true });
-    window.addEventListener('touchend', function () {
-      clearTimeout(touchTimer);
-      touchTimer = setTimeout(function () { root.classList.remove('spot-on'); }, 900);
-    }, { passive: true });
-    document.addEventListener('mouseleave', function () { root.classList.remove('spot-on'); });
-  }
-
   async function boot() {
-    bindSpotlight();
     try {
       await DB.initSettings();
     } catch (err) {
