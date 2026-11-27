@@ -107,7 +107,86 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
   to   { transform: translate3d(0, 0, 0); }
 }
 
+/* ---------- v2.28 雨幕明暗流动 / 雪面光泽缓移（纯 CSS，不加 DOM、不加 JS） ----------
+   做法：伪元素铺一层「暗-亮-暗」的宽条带，元素自身 rotate 出斜角，
+   再沿本地 x 轴平移正好一个条带周期 → 位移与图案周期同步，永远无缝。
+   两层：一层周期长（大尺度明暗起伏）、一层周期短（雨幕细纹理），
+   斜角/周期/时长/方向都不同，叠在一起就不是整齐的梳齿，而是乱流的明暗。 */
+:root[data-weather="rain"] .sky-precip::before,
+:root[data-weather="rain"] .sky-precip::after,
+:root[data-weather="snow"] .sky-precip::before,
+:root[data-weather="snow"] .sky-precip::after {
+  content: "";
+  position: absolute;
+  inset: -45% -30%;
+  pointer-events: none;
+  will-change: transform;
+  transform: rotate(var(--sheet-tilt, -8deg)) translate3d(0, 0, 0);
+}
+
+/* 雨：大尺度暗涌，模拟雨幕被风推着走时的明暗推移 */
+:root[data-weather="rain"] .sky-precip::before {
+  --sheet-p: 860px;
+  --sheet-tilt: -11deg;
+  background-image: repeating-linear-gradient(90deg,
+    rgba(24, 52, 86, 0) 0,
+    rgba(24, 52, 86, .07) 200px,
+    rgba(20, 46, 78, .12) 340px,
+    rgba(24, 52, 86, .035) 480px,
+    rgba(24, 52, 86, 0) 630px,
+    rgba(226, 241, 254, .06) 730px,
+    rgba(255, 255, 255, 0) 860px);
+  animation: skySheetPan 175s linear infinite;
+}
+/* 雨：细纹理，更稀更慢，反向走，避免和上一层同步 */
+:root[data-weather="rain"] .sky-precip::after {
+  --sheet-p: 250px;
+  --sheet-tilt: -5deg;
+  opacity: .7;
+  background-image: repeating-linear-gradient(90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(26, 54, 88, .05) 62px,
+    rgba(255, 255, 255, 0) 118px,
+    rgba(222, 239, 253, .04) 168px,
+    rgba(255, 255, 255, 0) 250px);
+  animation: skySheetPan 64s linear infinite reverse;
+}
+
+/* 雪：云在 v2.27 就已收起，高光带落在整片雪空上 —— 宽、缓、几乎无色，
+   只把亮度轻轻推过去，像云后的光慢慢扫过雪面 */
+:root[data-weather="snow"] .sky-precip::before {
+  --sheet-p: 900px;
+  --sheet-tilt: -5deg;
+  background-image: repeating-linear-gradient(90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, .09) 210px,
+    rgba(255, 255, 255, .15) 352px,
+    rgba(255, 255, 255, .04) 520px,
+    rgba(255, 255, 255, 0) 660px,
+    rgba(176, 203, 238, .045) 770px,
+    rgba(255, 255, 255, 0) 900px);
+  animation: skySheetPan 200s linear infinite;
+}
+:root[data-weather="snow"] .sky-precip::after {
+  --sheet-p: 380px;
+  --sheet-tilt: -3deg;
+  opacity: .7;
+  background-image: repeating-linear-gradient(90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, .06) 120px,
+    rgba(255, 255, 255, 0) 236px,
+    rgba(170, 199, 234, .035) 300px,
+    rgba(255, 255, 255, 0) 380px);
+  animation: skySheetPan 110s linear infinite reverse;
+}
+
+@keyframes skySheetPan {
+  from { transform: rotate(var(--sheet-tilt, -8deg)) translate3d(0, 0, 0); }
+  to   { transform: rotate(var(--sheet-tilt, -8deg)) translate3d(calc(var(--sheet-p, 330px) * -1), 0, 0); }
+}
+
 /* 低动效偏好：停在原地，只保留静态天气配色 */
 @media (prefers-reduced-motion: reduce) {
-  .sky-cloud, .sky-precip i { animation: none !important; }
+  .sky-cloud, .sky-precip i,
+  .sky-precip::before, .sky-precip::after { animation: none !important; }
 }
