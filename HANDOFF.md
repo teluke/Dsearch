@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 21:05 ｜ 当前版本：**v2.36.0** ｜ 缓存：`gongzuowenjian-v81`
+> 最后更新：2026-11-27 22:20 ｜ 当前版本：**v2.37.0** ｜ 缓存：`gongzuowenjian-v82`
 
 ---
 
@@ -52,10 +52,10 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.36.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.36.0`
-- SW 缓存 `gongzuowenjian-v81`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.36.0`（commit `c788d4a`），已推 `origin/main`，Pages 已生效
-- 工作区干净，无未提交改动
+- 版本 `APP_VERSION = '2.37.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.37.0`
+- SW 缓存 `gongzuowenjian-v82`，清单已含 `./css/sky.css`、`./js/weather.js`
+- Git：tag `v2.36.0`（commit `c788d4a`）为上一版；v2.37.0 待提交
+- 当前改动：滚动冻结天空动画 + 桌面三云错开落位
 
 ---
 
@@ -108,7 +108,9 @@ node server.js                      # 静态服务，端口 5173
 
 **上下浮动（v2.33 / v2.34 / v2.36）**：`@property` 注册 `--float-c1/c2/c3`，48/62/76s linear 循环改值（±5/±4/±3px，单周期 `-N → +N → -N`，两端不停顿）。v2.36 起动画挂在新增的 `.sky-float` 容器（包住云与影），**不再挂在 `.sky`**——背景底图本身 `animation: none`，滚动时不会因整棵背景子树每帧重算样式而闪一下。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；低动效下 `.sky-float` 动画整体关闭。
 
-**小狗云（v2.32 / v2.33）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。v2.33 起按瓦片原比例铺图并下移落位，桌面透明度再压一档。改云只改脚本再重跑，不要手改 `sky.css`。
+**小狗云（v2.32 / v2.33 / v2.37）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。v2.33 起按瓦片原比例铺图并下移落位，桌面透明度再压一档。v2.37 把远层 placements 从 x300/x1000 改到 x940/x1350——原来 x300 的歪头狗整只被近层吐舌狗（x180–540）盖住，现在首屏三朵 x 区间 180–540 / 600–900 / 940–1130 互不重叠。改云只改脚本再重跑，不要手改 `sky.css`。
+
+**滚动冻结（v2.37）**：`app.js` 的 `bindSkyFreeze()` 监听 `scroll`（capture，含内部滚动容器）/ `touchmove` / `wheel` / `touchend`，滚动时给 `html` 加 `.sky-scrolling`，停手 180ms 后移除。`sky.css` 里对应规则把 `.sky-float`、三层 `.sky-cloud`、`.sky-precip i` 和两条明暗伪元素的 `animation-play-state` 设成 `paused !important`。只暂停、不重置：动画停在当前时刻，恢复后从原处继续，云不跳帧；视差 `--wx/--wy` 仍照常更新。切此方案是用户从「冻结 / 单张动画图 / 只烘云层」里选的 A，若仍闪再走云层动画图那条路。
 
 > **⚠ 影层矩形**：高斯模糊前必须垫 110px 透明边，影层缩放必须用双线性 + alpha 截断；否则模糊/缩放会把 alpha 渗到整块矩形，叠在天空上就是淡蓝方块。
 > **⚠ 原图隐私**：`puppy-clouds.jpg` 只在本地 `.workbuddy/tmp/source/`，不要 `git add`。
@@ -197,6 +199,11 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 ### v2.29.0 — 云影 + 视差
 见 4.4 / 4.6。
 
+### v2.37.0 — 滚动冻结天空动画 / 桌面三云不遮挡
+1. `bindSkyFreeze()` 滚动中给 `html` 加 `.sky-scrolling`，`sky.css` 把所有天空动画 `animation-play-state` 切 `paused !important`；停手 180ms 恢复，不重置进度、不跳帧
+2. 远层歪头狗 placements 从 x300/x1000 挪到 x940/x1350，桌面首屏三朵 x 区间互不重叠
+3. `audit-v237.js` 20 项全过；全量回归零失败
+
 ### v2.36.0 — 滑动闪背景：天空独立合成 / 去白色光晕
 1. `.sky` 改 `z-index:0` + `translateZ(0)` + `will-change:transform` + `isolation:isolate` + `contain:layout paint`；`.app` 抬到 `z-index:1`
 2. 删掉 `html, body` 三道白色径向渐变和 `.app::before` 的 30px 模糊白光晕（含 `glazeDrift` 动画）；天空色只靠 `sky.css` 的 `html background-color` 兜底
@@ -253,7 +260,7 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 
 ```bash
 cd .workbuddy/pw
-node audit-v236.js
+node audit-v237.js
 ```
 
 跑前先 `node server.js` 起 5173 服务。
@@ -262,6 +269,7 @@ node audit-v236.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
+| `audit-v237.js` | 20 | 滚动冻结全部天空动画、停手恢复不跳帧、桌面三云区间分离、手机端同样生效 |
 | `audit-v236.js` | 15 | 天空独立合成层、无白色光晕与顶栏模糊、浮动迁到 .sky-float、滑动无报错 |
 | `audit-v235.js` | 15 | 整页动画无 opacity、逐帧 opacity=1、连点串行化、异步等待期旧页仍在、低动效 |
 | `audit-v234.js` | 16 | 切页渲染中旧页可见、目标页离屏有宽度、匀速浮动、七块抽屉与状态记忆 |
@@ -310,6 +318,8 @@ node audit-v236.js
 8. **`make-sky2.py` 的 `%s` 占位符别拼在 `%` 之后**，否则四个天气全回落到晴天。
 9. **切页两个坑，别只修一个**：① v2.34 前渲染等待期两页皆空，只剩亮天空；现在旧页保持可见，目标页 `.view-waiting`（`position:absolute` 离屏、保留宽度读 `clientWidth`），渲染完才换页，别把 `view-waiting` 改回 `display:none`。② v2.35 发现 `playViewPush()` 的整页 `opacity .45→1` 才是残留爆闪——页面透明，淡入时亮天空透上来；关键帧只留 `transform`，`will-change` 也别写 opacity。`switchTab()` 必须串行入队，连点时旧任务不能抢回 active；判断当前页看真实 `.view.active`，别信 `Views.state.tab`（它在 `go()` 开头就改了）。
 10. **滑动闪背景查「亮底竞争」**：v2.36 前 `html` 有三道白色径向渐变、`.app::before` 有 30px 模糊白光晕、`.appbar` 有 `backdrop-filter`，天空又是 `z-index:-1` 的普通固定层；滚动时先画亮底再补合成层就会闪。现在天空独立合成层 `z-index:0`、`.app` 为 1，亮底和模糊全删，浮动动画只挂 `.sky-float`。**别再把渐变/模糊加回去，也别把云浮动动画挂回 `.sky`。**
+11. **滚动冻结只切 `animation-play-state`，别重置动画**。改成 `animation:none` 或改关键帧会让云回到起点（跳帧），观感比闪更差。`paused !important` 必须覆盖 `.sky-float` / 三层云 / `.sky-precip i` 与两条伪元素，漏一条天气切换时仍会闪。`scroll` 监听要 `capture:true` 才接得住抽屉/弹窗内部的滚动。
+12. **云层 placements 别 pairwise 靠得太近**：三层云宽 190~360px，同一瓦片里若两个 x 区间重叠，近层会把远层整只压住（v2.37 前歪头狗就这样）。新排布后要截图人工核对，区间分离不等于视觉不重叠（还要看 y 与瓦片内的实际狗体边界）。
 
 ---
 

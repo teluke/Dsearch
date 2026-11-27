@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.36.0';
+  window.APP_VERSION = '2.37.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -461,6 +461,36 @@
     window.addEventListener('blur', function () { tx = 0; ty = 0; put(); });
   }
 
+  /* v2.37 滚动冻结：滚动期间暂停天空所有 CSS 动画，停手 180ms 后恢复。
+     移动端 Safari 滚动时会重绘 fixed 合成层，正在跑的云漂移/浮动/雨雪
+     会让背景爆闪一下。只切 animation-play-state —— 动画停在当前时刻，
+     恢复后从原处继续，云不会跳帧；视差变量照常更新，纵深仍然跟手。
+     capture:true 连抽屉、弹窗里的内部滚动也覆盖。 */
+  function bindSkyFreeze() {
+    let timer = 0;
+    let frozen = false;
+    function thaw() {
+      if (!frozen) return;
+      frozen = false;
+      document.documentElement.classList.remove('sky-scrolling');
+    }
+    function freeze() {
+      if (!frozen) {
+        frozen = true;
+        document.documentElement.classList.add('sky-scrolling');
+      }
+      clearTimeout(timer);
+      timer = setTimeout(thaw, 180);
+    }
+    window.addEventListener('scroll', freeze, { capture: true, passive: true });
+    window.addEventListener('touchmove', freeze, { passive: true });
+    window.addEventListener('wheel', freeze, { passive: true });
+    window.addEventListener('touchend', function () {
+      clearTimeout(timer);
+      timer = setTimeout(thaw, 180);
+    }, { passive: true });
+  }
+
   /* 时段标记：影子长度按太阳高度走（早长 → 正午短 → 傍晚再拉长），
      只写一个 data-daypart，天空层用 CSS 变量接住，十分钟校一次。 */
   function daypartOf(h) {
@@ -497,6 +527,7 @@
   async function boot() {
     bindSkyLight();
     bindSkyParallax();
+    bindSkyFreeze();
     markDaypart();
     bindHaptics();
     try {

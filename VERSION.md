@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| 应用版本 | **v2.36.0** |
-| Git 标签 | `v2.36.0` |
-| Service Worker 缓存 | `gongzuowenjian-v81` |
+| 应用版本 | **v2.37.0** |
+| Git 标签 | `v2.37.0` |
+| Service Worker 缓存 | `gongzuowenjian-v82` |
 | IndexedDB schema | version 5（folders 支持 parentId 子文件夹层级） |
 | 同步协议 | PROTO 2（清单/大消息分片 + 差额勾选 + 对账重传），自动兼容 PROTO 1 |
 | 线上地址 | （私有部署，地址与访问口令不入库） |
@@ -39,7 +39,7 @@
 
 ## 版本沿革
 
-本仓库自 `v2.8.0` 起对外发布，标签 `v2.36.0` 即本存档提交。
+本仓库自 `v2.8.0` 起对外发布，标签 `v2.37.0` 即本存档提交。
 
 v1.0 → v2.7 的开发存档只在本地保留、不随仓库发布，脉络如下：
 
@@ -95,6 +95,13 @@ v1.0 → v2.7 的开发存档只在本地保留、不随仓库发布，脉络如
 | v2.34.0 | 修掉切页渲染期间两页皆空导致的天空爆闪；云浮动改为全程匀速往返；设置页文档管理/备份与恢复/局域网同步/数据安全四栏改抽屉 |
 | v2.35.0 | 从逻辑上根治剩余爆闪：切页动画去掉整页 opacity 淡入，只推 transform；导航串行化，连点不会被旧任务抢页 |
 | v2.36.0 | 按滑动时闪背景继续修：天空提为独立合成层(z-index 0、app 1)，删掉 html 白色径向渐变与 .app::before 模糊光晕、顶栏去 backdrop-filter；云浮动迁到 .sky-float，背景底图零动画 |
+| v2.37.0 | 采用「滚动冻结」方案：滚动/触摸滑动期间暂停全部天空动画，停手 180ms 后恢复；远层小狗云右移到中层右侧，桌面三朵不再互相遮挡 |
+
+## v2.37.0 变更明细
+- **滚动冻结**：`bindSkyFreeze()` 监听 `scroll`（capture，覆盖内部滚动容器）/ `touchmove` / `wheel` / `touchend`，滚动时给 `html` 加 `.sky-scrolling`；`sky.css` 里这条规则把 `.sky-float` 三条浮动、三层 `skyDrift`、雨雪 `i` 与两条明暗伪元素的 `animation-play-state` 设为 `paused !important`。停手 180ms 后移除，动画从原时刻继续，不跳帧；视差变量仍照常更新。
+- **桌面云不遮挡**：`puppy_cloud_assets.py` 里远层（歪头）第一份从 x300 移到 x940、第二份移到 x1350；首屏三朵 x 区间变成 180–540 / 600–900 / 940–1130，互不重叠。原位置被近层吐舌狗整只压住。
+- **验证**：新增 `audit-v237.js` 20 项全过（冻结规则覆盖、滚动中暂停、停手恢复无回跳、连续滚动/touchmove、三云区间分离、既有天空不回退、手机端同样生效）；全量回归零失败。
+- **发布**：缓存 `gongzuowenjian-v82`，前端版本 v2.37.0。
 
 ## v2.36.0 变更明细
 - **背景独立合成**：`.sky` 从 `z-index:-1` 改 `0`，`transform: translateZ(0)`、`will-change: transform`、`isolation: isolate`、`contain: layout paint`；`.app` 提到 `z-index:1`。天空层不再参与页面 DOM 交换时的层重排。
