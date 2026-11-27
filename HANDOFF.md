@@ -54,8 +54,8 @@ node server.js                      # 静态服务，端口 5173
 
 - 版本 `APP_VERSION = '2.33.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.33.0`
 - SW 缓存 `gongzuowenjian-v78`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.32.0`（commit `64c8147`）为上一版；v2.33.0 待提交
-- 当前改动：天空等比铺图 + 手机端落位修正 + 桌面淡化 + 上下浮动
+- Git：tag `v2.33.0`（commit `f769c7d`），已推 `origin/main`，Pages 已生效
+- 工作区干净，无未提交改动
 
 ---
 
