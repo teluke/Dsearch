@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 19:22 ｜ 当前版本：**v2.35.0** ｜ 缓存：`gongzuowenjian-v80`
+> 最后更新：2026-11-27 19:38 ｜ 当前版本：**v2.35.0** ｜ 缓存：`gongzuowenjian-v80`
 
 ---
 
@@ -54,8 +54,8 @@ node server.js                      # 静态服务，端口 5173
 
 - 版本 `APP_VERSION = '2.35.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.35.0`
 - SW 缓存 `gongzuowenjian-v80`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.34.0`（commit `b43912b`）为上一版；v2.35.0 待提交
-- 当前改动：切页动画去 opacity + 导航串行化
+- Git：tag `v2.35.0`（commit `0463b62`），已推 `origin/main`，Pages 已生效
+- 工作区干净，无未提交改动
 
 ---
 
