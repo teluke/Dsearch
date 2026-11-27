@@ -54,7 +54,7 @@ node server.js                      # 静态服务，端口 5173
 
 - 版本 `APP_VERSION = '2.31.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.31.0`
 - SW 缓存 `gongzuowenjian-v76`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.31.0`（commit 见 `git log -1`），已推 `origin/main`，Pages 已生效
+- Git：tag `v2.31.0`（commit `578a6fa`），已推 `origin/main`， Pages 已生效
 - 工作区干净，无未提交改动
 
 ---
@@ -266,8 +266,8 @@ node audit-v231.js
 
 ## 8. 待做方向（下一轮候选，都没开工）
 
-1. **云影随视差错位**：现在云在动、影子不动，大位移时会有 2~4px 的错位。可以把 `--wx` 也算进 `.sky-shadows` 的 `translate`，影子和云永远咬死。
-2. **折叠状态合并**：`kwOpen` / `weekOpen` 现在是两个独立 setting，可合并成 `scheduleFolds: {kw, week}`，与设置页的 `settingsFolds` 一个写法。
+1. **页签侧滑手势**：现在切页是按钮触发的 iOS 式 push，可以再给手机端加边缘右滑返回，方向按 `TABS` 顺序复用 `playViewPush()`。
+2. **云图细线随天气微调**：三款云的细线目前晴天/阴天只换灰阶，可把阴天的纹理透明度再压低一档，让阴云更软。
 
 ---
 
