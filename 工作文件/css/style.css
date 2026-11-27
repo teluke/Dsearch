@@ -3830,3 +3830,81 @@ select.input { background-color: rgba(255, 255, 255, .9); }
 
 /* 关键词关联表搬到信息查询页后，与结果区留出间距 */
 .kw-block { margin-top: 24px; }
+
+/* ==========================================================================
+   v2.31.0 字号分级 / 顺滑切换
+   桌面放大常用正文；手机保持紧凑但把过小的辅助文字抬到可读下限。
+   ========================================================================== */
+@media (min-width: 900px) {
+  body { font-size: 17px; line-height: 1.65; }
+  .appbar-title { font-size: 16px; }
+  .topbar .meta, .topbar .sub { font-size: 13px; }
+  .topbar h1 { font-size: 28px; }
+  .section-title { font-size: 18px; }
+  .section-title .count, .section-link { font-size: 13px; }
+  .chip { font-size: 13px; }
+  .btn, .input, textarea.input { font-size: 14px; }
+  .field > label { font-size: 13px; }
+  .field .hint { font-size: 12px; }
+  .doc-name { font-size: 16px; }
+  .doc-meta, .series-card .s-meta, .ev-period, .ev-hint { font-size: 13px; }
+  .ev-name, .series-card .s-name, .row-item .r-name { font-size: 16px; }
+  .setting-item .s-title { font-size: 15px; }
+  .setting-item .s-desc, .notice, .result p, .empty p, .inline-hint { font-size: 12.5px; }
+  .nav-item { font-size: 14px; }
+  .kw-title { font-size: 14px; }
+  .kw-sub, .kw-ctx { font-size: 12px; }
+  .cal-name { font-size: 11.5px; }
+  .cal-more { font-size: 10.5px; }
+  .sw-day em, .sw-range, .ws-label, .wk-chip, .kf-title, .kf-cur { font-size: 12px; }
+  .today-row .tc-name { font-size: 15px; }
+  .today-row .tc-meta, .today-row .tc-period { font-size: 12.5px; }
+}
+@media (max-width: 599px) {
+  body { font-size: 15px; line-height: 1.62; }
+  .topbar .meta, .topbar .sub { font-size: 12.5px; }
+  .section-title { font-size: 16.5px; }
+  .section-title .count, .section-link { font-size: 12px; }
+  .chip { font-size: 12.5px; }
+  .btn, .input, textarea.input { font-size: 13.5px; }
+  .field > label { font-size: 12.5px; }
+  .field .hint { font-size: 11.5px; }
+  .doc-name, .ev-name, .series-card .s-name { font-size: 15px; }
+  .doc-meta, .series-card .s-meta, .ev-period, .ev-hint { font-size: 12px; }
+  .setting-item .s-title { font-size: 14px; }
+  .setting-item .s-desc, .notice, .result p, .empty p { font-size: 12px; }
+  .kw-title { font-size: 13px; }
+  .kw-sub, .kw-ctx { font-size: 11.5px; }
+  .cal-name { font-size: 11px; }
+  .cal-more { font-size: 10.5px; }
+  /* 长文件名、课程名允许换行到第二行，不再被右侧徽标挤出屏幕 */
+  .doc-name, .ev-name, .today-row .tc-name, .row-item .r-name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+  }
+  .doc-side { max-width: 38%; }
+  .setting-item .s-desc, .notice, .result p, .empty p, .kw-ctx { overflow-wrap: anywhere; }
+}
+
+/* 切换视图时先渲染再动画：JS 只在合成层推 transform / opacity。 */
+.view.active { animation: none !important; will-change: auto; }
+.view.view-slide { will-change: transform, opacity; }
+@keyframes viewPushNext {
+  from { opacity: .48; transform: translate3d(18px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes viewPushPrev {
+  from { opacity: .48; transform: translate3d(-18px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+/* 滚动顺滑：去掉整页固定渐变，避免每帧重绘；顶栏模糊降一档。 */
+html, body { background-attachment: scroll !important; }
+.appbar {
+  background: linear-gradient(180deg, rgba(250, 253, 255, .92), rgba(246, 250, 255, .86));
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  backdrop-filter: blur(10px) saturate(1.05);
+}
+.view.view-waiting { visibility: hidden; }

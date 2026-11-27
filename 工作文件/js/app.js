@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.30.0';
+  window.APP_VERSION = '2.31.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -57,8 +57,30 @@
     if (fold) fold.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
+  /* iOS 式页面切换：先把目标页渲染完再放出来，动画只跑合成层的 transform / opacity。
+     旧版一边播动画一边往 DOM 里塞内容，长列表会在动画中途重排，所以看着一顿一顿。 */
+  function playViewPush(target, forward) {
+    if (!target || !target.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    target.classList.remove('view-waiting');
+    target.classList.add('view-slide');
+    const anim = target.animate([
+      { opacity: .45, transform: 'translate3d(' + (forward ? 20 : -20) + 'px, 0, 0)' },
+      { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+    ], { duration: 260, easing: 'cubic-bezier(.22, .8, .24, 1)' });
+    anim.finished.then(function () { target.classList.remove('view-slide'); })
+      .catch(function () { target.classList.remove('view-slide'); });
+  }
+
   async function switchTab(tab, updateHash) {
     if (TABS.indexOf(tab) < 0) tab = 'home';
+    const oldView = document.querySelector('.view.active');
+    const oldTab = oldView ? oldView.getAttribute('data-tab') : null;
+    const target = document.querySelector('.view[data-tab="' + tab + '"]');
+    const changed = !!oldView && oldTab !== tab;
+    if (changed) {
+      oldView.classList.remove('active');
+      target.classList.add('view-waiting');
+    }
     $$('.view').forEach(function (v) { v.classList.toggle('active', v.getAttribute('data-tab') === tab); });
     $$('.nav-item').forEach(function (t) { t.classList.toggle('on', t.getAttribute('data-tab') === tab); });
     const title = $('#appTitle');
@@ -74,13 +96,18 @@
     if (grp) grp.classList.toggle('open', tab === 'records' || tab === 'archive');
     closeNav();
     if (updateHash) {
-      const target = '#/' + tab;
-      if (location.hash !== target) history.replaceState(null, '', target);
+      const targetHash = '#/' + tab;
+      if (location.hash !== targetHash) history.replaceState(null, '', targetHash);
     }
     window.scrollTo(0, 0);
     closeFab();
     if (tab === 'events') setEventsBadge(0);
-    await Views.go(tab);
+    try {
+      await Views.go(tab);
+    } finally {
+      if (target) target.classList.remove('view-waiting');
+    }
+    if (changed) playViewPush(target, TABS.indexOf(tab) >= TABS.indexOf(oldTab));
   }
 
   /* 事件提醒：临近截止或逾期时打角标、每天弹一次提示 */

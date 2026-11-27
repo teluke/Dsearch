@@ -13,7 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null, kwOpen: false, weekOpen: false },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null, folds: { kw: false, week: false } },
     loaded: false,
     memoEditId: null,
     docs: [],
@@ -55,8 +55,12 @@
       sc.previewId = (await DB.getSetting('schedulePreviewId', null)) || null;
       sc.seriesName = (await DB.getSetting('scheduleSeriesName', '课表')) || '课表';
       sc.fieldKeywords = Object.assign(defaultFieldKeywords(), (await DB.getSetting('scheduleFieldKeywords', {})) || {});
-      sc.kwOpen = (await DB.getSetting('scheduleKwOpen', false)) === true;
-      sc.weekOpen = (await DB.getSetting('scheduleWeekOpen', false)) === true;
+      /* v2.31：两个折叠状态合到一个对象；旧的两条设置仍读一次，升级不丢状态 */
+      const folds = (await DB.getSetting('scheduleFolds', null)) || {};
+      sc.folds = {
+        kw: folds.kw === true || (folds.kw == null && (await DB.getSetting('scheduleKwOpen', false)) === true),
+        week: folds.week === true || (folds.week == null && (await DB.getSetting('scheduleWeekOpen', false)) === true)
+      };
       const savedMulti = await DB.getSetting('scheduleActiveKeywords', null);
       if (Array.isArray(savedMulti)) {
         sc.activeKeywords = savedMulti.filter(function (k) { return !!String(k || '').trim(); });
@@ -88,8 +92,7 @@
       schedulePreviewId: sc.previewId,
       scheduleSeriesName: sc.seriesName,
       scheduleFieldKeywords: sc.fieldKeywords || defaultFieldKeywords(),
-      scheduleKwOpen: !!sc.kwOpen,
-      scheduleWeekOpen: !!sc.weekOpen,
+      scheduleFolds: { kw: !!sc.folds.kw, week: !!sc.folds.week },
       scheduleActiveKeywords: sc.activeKeywords || [],
       scheduleActiveKeyword: (sc.activeKeywords || [])[0] || ''
     });
@@ -1807,8 +1810,8 @@
 
     /* 两个折叠面板并排：周次在左、关键词在右，点开谁谁在下方铺一整行。
        收起时只留「第 N 周」「当前词」，顶栏腾出来，课表主体上移。 */
-    const kwOpen = !!sc.kwOpen;
-    const wkOpen = !!sc.weekOpen;
+    const kwOpen = !!(sc.folds && sc.folds.kw);
+    const wkOpen = !!(sc.folds && sc.folds.week);
     const kwCurText = activeKws.length ? activeKws.join(' + ')
       : ((sc.keywords || []).length ? '未选取' : '未设置');
     const foldsHtml = '<div class="sched-folds' + (kwOpen ? ' kw-open' : '') + (wkOpen ? ' wk-open' : '') + '">' +
@@ -3273,7 +3276,7 @@
       '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>' +
 
       '<div class="section-title"><span>关于</span></div>' +
-      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.30.0') + ' · 数据不上传，无账号，无云端。' +
+      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.31.0') + ' · 数据不上传，无账号，无云端。' +
       '<br>可添加到手机主屏幕，像应用一样全屏使用。</div>';
   }
 
@@ -4681,8 +4684,8 @@
           fold.classList.toggle('open', open);
           if (wrap) wrap.classList.toggle('kw-open', open);
           kwFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-          state.schedule.kwOpen = open;
-          try { await DB.setSetting('scheduleKwOpen', open); } catch (err) { /* 记不住就只影响下次进来 */ }
+          state.schedule.folds.kw = open;
+          try { await DB.setSetting('scheduleFolds', state.schedule.folds); } catch (err) { /* 记不住就只影响下次进来 */ }
         }
         return;
       }
@@ -4696,8 +4699,8 @@
           fold.classList.toggle('open', open);
           if (wrap) wrap.classList.toggle('wk-open', open);
           wkFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-          state.schedule.weekOpen = open;
-          try { await DB.setSetting('scheduleWeekOpen', open); } catch (err) { /* 同上 */ }
+          state.schedule.folds.week = open;
+          try { await DB.setSetting('scheduleFolds', state.schedule.folds); } catch (err) { /* 同上 */ }
           if (open) {
             const view = document.getElementById('view-schedule');
             requestAnimationFrame(function () { if (view) centerWeekStrip(view); });

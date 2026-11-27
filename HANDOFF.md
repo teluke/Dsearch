@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 14:20 ｜ 当前版本：**v2.30.0** ｜ 缓存：`gongzuowenjian-v75`
+> 最后更新：2026-11-27 15:10 ｜ 当前版本：**v2.31.0** ｜ 缓存：`gongzuowenjian-v76`
 
 ---
 
@@ -52,9 +52,9 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.30.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.30.0`
-- SW 缓存 `gongzuowenjian-v75`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.30.0`（commit 见 `git log -1`），已推 `origin/main`，Pages 已生效
+- 版本 `APP_VERSION = '2.31.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.31.0`
+- SW 缓存 `gongzuowenjian-v76`，清单已含 `./css/sky.css`、`./js/weather.js`
+- Git：tag `v2.31.0`（commit 见 `git log -1`），已推 `origin/main`，Pages 已生效
 - 工作区干净，无未提交改动
 
 ---
@@ -99,6 +99,8 @@ node server.js                      # 静态服务，端口 5173
 `--tile-w`：桌面 1600px，窄屏 900px（`@media` 覆盖）。
 
 **云层视差（v2.30）**：`--wx` / `--wy` 现在写在 `.sky` 根节点（`#sky`）上，子层继承。`.sky-clouds .c3/.c2/.c1` 用独立的 `translate` 属性反向偏 2 / 3 / 4px，漂移仍走 `transform`，两者不抢。
+
+**云影同步（v2.31）**：`.sky-shadows .c3/.c2/.c1` 的 `translate` 在光源偏移后再加同一份 `--wx/--wy` 视差，过渡统一 `.16s`；影子透明度降到 `.10/.14/.17`。三款云由 `CLOUD_SHAPES` 的 `big/mid/far` 单轮廓烘焙成 data URI，阴天用灰阶同轮廓，不要回退到叠加圆。
 
 > **⚠ 拷贝层必须补 `--tile-w`**：v2.29 加 `.sky-shadows` 时忘了给新容器定义 `--tile-w`，子元素宽度算出 0，整层完全不可见，排查了很久。
 
@@ -183,6 +185,13 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 ### v2.29.0 — 云影 + 视差
 见 4.4 / 4.6。
 
+### v2.31.0 — 云影同步 / 三款新云 / 字号与切换
+1. 云影叠加与云完全相同的指针视差，过渡同速（`.16s`），消除拖尾；影子更淡
+2. 三款手绘单轮廓云替换旧的多圆叠色块：`big / mid / far`，各带高光、底影、细线
+3. 桌面正文 17px、标题 18px；手机正文 15px，长文件/课程名可换行，右侧徽标收窄
+4. `kwOpen` / `weekOpen` 合并为 `scheduleFolds: {kw, week}`，旧设置迁移一次
+5. 页面切换先渲染后动画，只推 `transform/opacity`（260ms）；整页固定背景改滚动，顶栏模糊降档
+
 ### v2.30.0 — 云层视差 / 影子光源 / 界面收敛
 1. 云层跟随指针反向偏移 2~4px（远层几乎不动），`--wx` / `--wy` 改挂 `.sky`
 2. 影子有固定光源：晴偏右下、阴偏正下，按时段调影长
@@ -201,7 +210,7 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 
 ```bash
 cd .workbuddy/pw
-node audit-v230.js
+node audit-v231.js
 ```
 
 跑前先 `node server.js` 起 5173 服务。
@@ -210,6 +219,7 @@ node audit-v230.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
+| `audit-v231.js` | 24 | 云影视差同步、三款新云、折叠对象、字号分级、iOS 式切换 |
 | `audit-v230.js` | 43 | 云层视差、影子光源、课表折叠并排、设置抽屉、首页当日课表、搜索入口 |
 | `audit-v229.js` | 16 | 云影、视差、低动效、手机端 |
 | `audit-v228.js` | 22 | 雨雪明暗流动、位移实测 |
@@ -229,7 +239,7 @@ node audit-v230.js
 
 ### 已知的既有失败（与近期改动无关，别当回归）
 
-`audit-v17.js`（2 项）、`audit-v21.js`（3 项）、`audit-v25.js`（3 项）、`audit-display.js`（超时）、`audit-searchview.js` F6a（正文基线 15px，断言写死 14px）
+`audit-v17.js`（2 项）、`audit-v21.js`（3 项）、`audit-v25.js`（3 项）、`audit-display.js`（超时）
 
 ### 写审计脚本的注意点
 
