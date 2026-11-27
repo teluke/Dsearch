@@ -54,7 +54,7 @@ node server.js                      # 静态服务，端口 5173
 
 - 版本 `APP_VERSION = '2.32.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.32.0`
 - SW 缓存 `gongzuowenjian-v77`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.32.0`（commit 见 `git log -1`），已推 `origin/main`，Pages 已生效
+- Git：tag `v2.32.0`（commit `64c8147`），已推 `origin/main`，Pages 已生效
 - 工作区干净，无未提交改动
 
 ---
