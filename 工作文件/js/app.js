@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.28.0';
+  window.APP_VERSION = '2.29.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -384,6 +384,31 @@
     window.addEventListener('blur', hide);
   }
 
+  /* 雨雪视差：指针位置换算成 -1..1 写进 .sky-precip 的 --wx / --wy，
+     雨丝、雪花各按远近乘不同幅度横纵偏移。只写两个自定义属性，一次 rAF 一帧，
+     真正动的是合成器里的 translate，不重排。触屏上跟手拖动，抬手停住。 */
+  function bindSkyParallax() {
+    const el = document.querySelector('.sky-precip');
+    if (!el) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    let raf = 0, tx = 0, ty = 0;
+    function apply() {
+      raf = 0;
+      el.style.setProperty('--wx', tx.toFixed(3));
+      el.style.setProperty('--wy', ty.toFixed(3));
+    }
+    function put() { if (!raf) raf = requestAnimationFrame(apply); }
+    function move(e) {
+      if (!e || typeof e.clientX !== 'number' || !window.innerWidth || !window.innerHeight) return;
+      tx = (e.clientX / window.innerWidth) * 2 - 1;
+      ty = (e.clientY / window.innerHeight) * 2 - 1;
+      put();
+    }
+    window.addEventListener('pointermove', move, { passive: true });
+    document.addEventListener('mouseleave', function () { tx = 0; ty = 0; put(); });
+    window.addEventListener('blur', function () { tx = 0; ty = 0; put(); });
+  }
+
   /* 按下水晶按键的触感：手机端给 8ms 轻振，桌面端浏览器没有 vibrate，自然为空 */
   let hapticsOn = true;
   const HAPTIC_SEL = '.btn,.icon-btn,.chip,.kw-chip,.wk-chip,.sw-day,.sh-week,.ft-btn,' +
@@ -402,6 +427,7 @@
 
   async function boot() {
     bindSkyLight();
+    bindSkyParallax();
     bindHaptics();
     try {
       hapticsOn = (await DB.getSetting('haptics', true)) !== false;
