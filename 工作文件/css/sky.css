@@ -1,5 +1,5 @@
-/* v2.37 天空天气层（自动生成，勿手改；改 .workbuddy/tmp/make-sky2.py 后重跑）
-   四套天空 + 远近三层小狗云；背景独立合成层，滚动期间冻结天空动画，首尾无缝 */
+/* v2.38 天空天气层（自动生成，勿手改；改 .workbuddy/tmp/make-sky2.py 后重跑）
+   四套天空 + 远近三层小狗云（桌面 CSS 动画 / 手机烘焙动画图）；背景独立合成层，首尾无缝 */
 :root {
   --sky-img: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 900' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='s' x1='0' y1='0' x2='0.05' y2='1'%3E%3Cstop offset='0' stop-color='%235C9BDF'/%3E%3Cstop offset='.16' stop-color='%237FB4EC'/%3E%3Cstop offset='.38' stop-color='%23A8CDF4'/%3E%3Cstop offset='.62' stop-color='%23CBE2FA'/%3E%3Cstop offset='.82' stop-color='%23E4F1FE'/%3E%3Cstop offset='1' stop-color='%23FAFDFF'/%3E%3C/linearGradient%3E%3Cfilter id='h' x='-25%25' y='-25%25' width='150%25' height='150%25'%3E%3CfeGaussianBlur stdDeviation='40'/%3E%3C/filter%3E%3C/defs%3E%3Crect width='1200' height='900' fill='url(%23s)'/%3E%3Cellipse cx='280' cy='800' rx='640' ry='150' fill='%23FFFFFF' opacity='.38' filter='url(%23h)'/%3E%3Cellipse cx='1060' cy='900' rx='560' ry='120' fill='%23FFFFFF' opacity='.30' filter='url(%23h)'/%3E%3C/svg%3E");
   --sky-base: #9EC6F0;
@@ -95,6 +95,47 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
 @keyframes skyDrift {
   from { transform: translate3d(0, 0, 0); }
   to   { transform: translate3d(calc(var(--tile-w) * -1), 0, 0); }
+}
+
+/* ---------- v2.38 手机端：三层云烘焙成一张透明动画 WebP ----------
+   手机合成层纹理过小时，background-repeat 的平铺接缝落在屏幕边缘要重新采样，
+   滑动就闪一下、跟手发涩。这里改成单个 <img>：图内自带三层云的浮动与呼吸，
+   CSS 侧只剩一次 GPU 平移（正好一个瓦片宽，首尾无缝），不再有 repeat 平铺。
+   资源由 .workbuddy/tmp/make-cloud-anim.py 生成，桌面端继续走上面的 CSS 三层。 */
+.sky-m { display: none; }
+@media (max-width: 700px) {
+  /* 手机不再渲染桌面那六层大瓦片，合成层只留一张图 */
+  .sky-clouds, .sky-shadows, .sky-float { display: none; }
+  .sky-m {
+    display: block;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    transition: opacity 1.2s ease;
+  }
+  .sky-m img {
+    position: absolute;
+    left: 0;
+    top: 110px;
+    width: 1600px;
+    height: 450px;
+    opacity: .32;
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+    animation: skyDriftM 285s linear infinite;
+    /* 视差仍生效：translate 与 transform 是两条独立的变换通道 */
+    translate: calc(var(--wx, 0) * -3px) calc(var(--wy, 0) * -1.8px);
+    transition: translate .16s cubic-bezier(.22, .7, .3, 1);
+  }
+  :root[data-weather="cloudy"] .sky-m img { opacity: .25; }
+  :root[data-weather="rain"] .sky-m,
+  :root[data-weather="snow"] .sky-m { opacity: 0; }
+}
+
+@keyframes skyDriftM {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-800px, 0, 0); }
 }
 
 /* 雨雪天：云收起 */
@@ -318,13 +359,14 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
    html.sky-scrolling 由 app.js 的 bindSkyFreeze() 挂上。 */
 html.sky-scrolling .sky-float,
 html.sky-scrolling .sky-cloud,
+html.sky-scrolling .sky-m img,
 html.sky-scrolling .sky-precip i,
 html.sky-scrolling .sky-precip::before,
 html.sky-scrolling .sky-precip::after { animation-play-state: paused !important; }
 
 /* 低动效偏好：停在原地，只保留静态天气配色 */
 @media (prefers-reduced-motion: reduce) {
-  .sky, .sky-float, .sky-cloud, .sky-precip i,
+  .sky, .sky-float, .sky-cloud, .sky-m img, .sky-precip i,
   .sky-precip::before, .sky-precip::after { animation: none !important; }
   .sky-precip i { translate: none !important; }
   .sky-clouds .sky-cloud { translate: none !important; }

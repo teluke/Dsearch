@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| 应用版本 | **v2.37.0** |
-| Git 标签 | `v2.37.0` |
-| Service Worker 缓存 | `gongzuowenjian-v82` |
+| 应用版本 | **v2.38.0** |
+| Git 标签 | `v2.38.0` |
+| Service Worker 缓存 | `gongzuowenjian-v83` |
 | IndexedDB schema | version 5（folders 支持 parentId 子文件夹层级） |
 | 同步协议 | PROTO 2（清单/大消息分片 + 差额勾选 + 对账重传），自动兼容 PROTO 1 |
 | 线上地址 | （私有部署，地址与访问口令不入库） |
@@ -39,7 +39,7 @@
 
 ## 版本沿革
 
-本仓库自 `v2.8.0` 起对外发布，标签 `v2.37.0` 即本存档提交。
+本仓库自 `v2.8.0` 起对外发布，标签 `v2.38.0` 即本存档提交。
 
 v1.0 → v2.7 的开发存档只在本地保留、不随仓库发布，脉络如下：
 
@@ -96,6 +96,15 @@ v1.0 → v2.7 的开发存档只在本地保留、不随仓库发布，脉络如
 | v2.35.0 | 从逻辑上根治剩余爆闪：切页动画去掉整页 opacity 淡入，只推 transform；导航串行化，连点不会被旧任务抢页 |
 | v2.36.0 | 按滑动时闪背景继续修：天空提为独立合成层(z-index 0、app 1)，删掉 html 白色径向渐变与 .app::before 模糊光晕、顶栏去 backdrop-filter；云浮动迁到 .sky-float，背景底图零动画 |
 | v2.37.0 | 采用「滚动冻结」方案：滚动/触摸滑动期间暂停全部天空动画，停手 180ms 后恢复；远层小狗云右移到中层右侧，桌面三朵不再互相遮挡 |
+| v2.38.0 | 手机端三层云烘焙成一张透明动画 WebP（40 帧 / 1.2MB），去掉 background-repeat 平铺，修掉云贴近屏幕边缘时的闪烁与卡顿；桌面继续走原 CSS 三层 |
+
+## v2.38.0 变更明细
+- **手机端云层换实现**：新增 `assets/sky/clouds-m.webp`——1600×450 透明动画 WebP，40 帧 @5fps / 1.2MB，图内已含三层小狗云的浮动（8s/4s/16s 三种周期）、极小幅水平呼吸与云下淡影。`index.html` 用 `<picture>` 挂载，`<source media="(max-width:700px)">`，桌面不匹配时回落到 1px 占位，**不会下载这张图**。
+- **为什么换**：手机上三层 `background-repeat: repeat-x` 的大瓦片，平铺接缝落在屏幕边缘要重新采样，滑动时纹理分块反复上传，于是靠近边缘就闪、跟手发涩。改成单个 `<img>` 后 CSS 侧只剩一次 GPU 平移（`skyDriftM`，285s 走一个 800px 瓦片宽，首尾无缝），合成层从「6 张大瓦片」降到「1 张图」。
+- **保留的东西**：视差仍写在 `translate`（`--wx/--wy`，与 `transform` 分两条通道，互不覆盖）；滚动冻结仍会把平移 `paused`；晴天 `.32` / 阴天 `.25` / 雨雪淡出的天气态照旧；窄屏隐藏 `.sky-clouds / .sky-shadows / .sky-float`，桌面完全不触发这些规则。
+- **生成脚本**：`.workbuddy/tmp/make-cloud-anim.py`（从 `source/cloud-*.png` 取单朵云，按层烘焙 alpha 系数与柔和描边，再压成有损 WebP + 无损 alpha，`exact=True` 防止透明区被染黑）。
+- **验证**：新增 `audit-v238.js` 26 项全过（动画图真实含 ANIM 块、图内动画独立于 CSS 播放、视差与冻结不失效、天气四态、桌面零下载、跨 700px 双向切换）；适配 `audit-v233/232/229/227` 中按旧瓦片写的手机断言；全量回归零失败。
+- **发布**：缓存 `gongzuowenjian-v83`，前端版本 v2.38.0。
 
 ## v2.37.0 变更明细
 - **滚动冻结**：`bindSkyFreeze()` 监听 `scroll`（capture，覆盖内部滚动容器）/ `touchmove` / `wheel` / `touchend`，滚动时给 `html` 加 `.sky-scrolling`；`sky.css` 里这条规则把 `.sky-float` 三条浮动、三层 `skyDrift`、雨雪 `i` 与两条明暗伪元素的 `animation-play-state` 设为 `paused !important`。停手 180ms 后移除，动画从原时刻继续，不跳帧；视差变量仍照常更新。

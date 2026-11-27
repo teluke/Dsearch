@@ -29,6 +29,11 @@
       <div class="sky-cloud c1"></div>
     </div>
   </div>
+  <!-- v2.38 手机端云层：三层云烘焙成一张透明动画 WebP，桌面不加载（source 媒体查询不匹配时走 1px 占位） -->
+  <picture class="sky-m" id="skyM">
+    <source media="(max-width: 700px)" srcset="assets/sky/clouds-m.webp" type="image/webp">
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="" width="1600" height="450" decoding="async">
+  </picture>
   <div class="sky-precip"><i></i><i></i><i></i></div>
   <div class="sky-light" id="skyLight"></div>
 </div>
@@ -115,7 +120,7 @@
           <span class="nav-label">个人设置</span>
         </button>
       </nav>
-      <div class="nav-foot">工作文件 v2.37.0 · 无账号 · 无云端</div>
+      <div class="nav-foot">工作文件 v2.38.0 · 无账号 · 无云端</div>
     </div>
 
     <!-- 文件归档的二级抽屉：点右下角箭头从左侧滑出，不占列表高度 -->
