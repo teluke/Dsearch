@@ -33,16 +33,20 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
 }
 
 /* ---------- 云：三层各自横移，速度与高度不同 → 视觉上不规则 ---------- */
-.sky-clouds { position: absolute; inset: 0; transition: opacity 1.2s ease; }
+.sky-clouds { position: absolute; inset: 0; transition: opacity 1.2s ease; --tile-w: 1600px; }
 .sky-cloud {
   position: absolute;
   left: 0;
   top: 0;
-  width: calc(100% + 1600px);
+  width: calc(100% + var(--tile-w));
   background-repeat: repeat-x;
-  background-size: 1600px 100%;
+  background-size: var(--tile-w) 100%;
   will-change: transform;
   transform: translate3d(0, 0, 0);
+}
+/* 窄屏把云图按比例缩小，云团数量与层次才和桌面一致 */
+@media (max-width: 700px) {
+  .sky-cloud { --tile-w: 900px; }
 }
 .sky-cloud.c3 { height: 46%; background-image: var(--cloud-c); opacity: .62; animation: skyDrift 540s linear infinite; }
 .sky-cloud.c2 { height: 56%; top: 3%; background-image: var(--cloud-b); opacity: .84; animation: skyDrift 400s linear infinite; }
@@ -53,7 +57,7 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
 
 @keyframes skyDrift {
   from { transform: translate3d(0, 0, 0); }
-  to   { transform: translate3d(-1600px, 0, 0); }
+  to   { transform: translate3d(calc(var(--tile-w) * -1), 0, 0); }
 }
 
 /* 雨雪天：云收起 */
