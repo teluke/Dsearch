@@ -1,6 +1,6 @@
 /* Service Worker：应用壳缓存，离线可用 */
 
-const CACHE = 'gongzuowenjian-v71';
+const CACHE = 'gongzuowenjian-v72';
 
 /* js/css 经常随版本更新，走网络优先，避免两端版本不一致导致同步配对失败；
    离线时回退到缓存，离线可用性不受影响 */
@@ -11,6 +11,7 @@ const ASSETS = [
   './index.html',
   './manifest.json',
   './css/style.css',
+  './css/sky.css',
   './js/db.js',
   './js/parser.js',
   './js/ocr.js',
@@ -23,6 +24,7 @@ const ASSETS = [
   './js/sync.js',
   './js/views.js',
   './js/sync-ui.js',
+  './js/weather.js',
   './js/app.js',
   './vendor/dexie.min.js',
   './vendor/jszip.min.js',

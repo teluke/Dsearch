@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.26.0';
+  window.APP_VERSION = '2.27.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -36,8 +36,25 @@
     const el = navDrawer();
     if (!el) return;
     el.classList.remove('open');
+    el.classList.remove('sub-open');
     el.setAttribute('aria-hidden', 'true');
     $('#menuBtn').setAttribute('aria-expanded', 'false');
+    setSub(false);
+  }
+
+  /* 文件归档的二级抽屉（v2.27：原来是把子项摊在列表里，会撑出一块空白） */
+  function openSub() {
+    const el = navDrawer();
+    if (!el) return;
+    el.classList.add('sub-open');
+    setSub(true);
+  }
+
+  function setSub(open) {
+    const sub = document.getElementById('navSubArchive');
+    if (sub) sub.setAttribute('aria-hidden', open ? 'false' : 'true');
+    const fold = document.querySelector('[data-nav-sub="archive"]');
+    if (fold) fold.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
   async function switchTab(tab, updateHash) {
@@ -47,12 +64,7 @@
     const title = $('#appTitle');
     if (title) title.textContent = TAB_TITLES[tab] || '工作文件';
     const grp = document.getElementById('navGroupArchive');
-    const fold = document.querySelector('[data-nav-fold="archive"]');
-    if (grp && fold) {
-      const open = tab === 'records';
-      grp.classList.toggle('open', open);
-      fold.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
+    if (grp) grp.classList.toggle('open', tab === 'records' || tab === 'archive');
     closeNav();
     if (updateHash) {
       const target = '#/' + tab;
@@ -372,13 +384,38 @@
     window.addEventListener('blur', hide);
   }
 
+  /* 按下水晶按键的触感：手机端给 8ms 轻振，桌面端浏览器没有 vibrate，自然为空 */
+  let hapticsOn = true;
+  const HAPTIC_SEL = '.btn,.icon-btn,.chip,.kw-chip,.wk-chip,.sw-day,.sh-week,.ft-btn,' +
+    '.nav-item,.nav-fold,.nav-qr,.section-link,.fab,.fab-sub,.memo-act,.memo-add-btn,' +
+    '.fchip,.kw-btn,.kw-fold-head';
+
+  function bindHaptics() {
+    if (!navigator.vibrate) return;
+    document.addEventListener('pointerdown', function (e) {
+      if (!hapticsOn) return;
+      if (!e.target || !e.target.closest) return;
+      if (!e.target.closest(HAPTIC_SEL)) return;
+      try { navigator.vibrate(8); } catch (err) { /* 部分浏览器要求用户手势，忽略 */ }
+    }, { passive: true });
+  }
+
   async function boot() {
     bindSkyLight();
+    bindHaptics();
+    try {
+      hapticsOn = (await DB.getSetting('haptics', true)) !== false;
+    } catch (e) { hapticsOn = true; }
     try {
       await DB.initSettings();
     } catch (err) {
       console.warn('[DB] 初始化失败', err);
       UI.toast('本地数据库不可用，请检查浏览器隐私设置', 'err');
+    }
+
+    /* 背景形态跟着当天天气走；不等网络，失败静默 */
+    if (window.Weather) {
+      try { await Weather.init(); } catch (e) { /* 忽略 */ }
     }
 
     $$('.nav-item').forEach(function (t) {
@@ -389,14 +426,18 @@
       });
     });
 
-    $$('[data-nav-fold]').forEach(function (btn) {
+    $$('[data-nav-sub="archive"]').forEach(function (btn) {
       btn.addEventListener('click', function (e) {
         e.stopPropagation();
-        const grp = document.getElementById('navGroupArchive');
-        if (!grp) return;
-        const open = !grp.classList.contains('open');
-        grp.classList.toggle('open', open);
-        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        openSub();
+      });
+    });
+    $$('[data-nav-sub-back]').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const el = navDrawer();
+        if (el) el.classList.remove('sub-open');
+        setSub(false);
       });
     });
 
@@ -475,6 +516,10 @@
 
   window.App = {
     switchTab: switchTab,
+    setHaptics: function (on) { hapticsOn = on !== false; },
+    setWeatherBg: async function (on) {
+      if (window.Weather) await Weather.setEnabled(on);
+    },
     updateEventsAlerts: updateEventsAlerts,
     refresh: async function () {
       await Views.refresh();

@@ -13,7 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null, kwOpen: false },
     loaded: false,
     memoEditId: null,
     docs: [],
@@ -55,6 +55,7 @@
       sc.previewId = (await DB.getSetting('schedulePreviewId', null)) || null;
       sc.seriesName = (await DB.getSetting('scheduleSeriesName', '课表')) || '课表';
       sc.fieldKeywords = Object.assign(defaultFieldKeywords(), (await DB.getSetting('scheduleFieldKeywords', {})) || {});
+      sc.kwOpen = (await DB.getSetting('scheduleKwOpen', false)) === true;
       const savedMulti = await DB.getSetting('scheduleActiveKeywords', null);
       if (Array.isArray(savedMulti)) {
         sc.activeKeywords = savedMulti.filter(function (k) { return !!String(k || '').trim(); });
@@ -86,6 +87,7 @@
       schedulePreviewId: sc.previewId,
       scheduleSeriesName: sc.seriesName,
       scheduleFieldKeywords: sc.fieldKeywords || defaultFieldKeywords(),
+      scheduleKwOpen: !!sc.kwOpen,
       scheduleActiveKeywords: sc.activeKeywords || [],
       scheduleActiveKeyword: (sc.activeKeywords || [])[0] || ''
     });
@@ -2983,6 +2985,13 @@
         ocr = await OCRJob.stats();
       } catch (e) { /* 统计失败不影响设置页 */ }
     }
+    let hapticsOn = true;
+    let weatherBg = true;
+    try {
+      hapticsOn = (await DB.getSetting('haptics', true)) !== false;
+      weatherBg = (await DB.getSetting('weatherBg', true)) !== false;
+    } catch (e) { /* 读不到按默认开 */ }
+
     const typeRows = [
       ['文档', info.byType.doc, '#6C8BF5'],
       ['表格', info.byType.sheet, '#3F9E72'],
@@ -3024,6 +3033,23 @@
       '<span class="icon-box other">' + UI.icon('database') + '</span>' +
       '<span class="s-main"><span class="s-title">清空全部数据</span><span class="s-desc">删除所有文件与记录，操作不可撤销</span></span>' +
       '<span class="chev">' + UI.icon('chev') + '</span>' +
+      '</button>' +
+      '</div>' +
+
+      '<div class="section-title"><span>外观与效果</span></div>' +
+      '<div class="setting-group">' +
+      '<button class="setting-item neu press" data-haptics-toggle type="button">' +
+      '<span class="icon-box">' + UI.icon('spark') + '</span>' +
+      '<span class="s-main"><span class="s-title">按键触感反馈</span>' +
+      '<span class="s-desc">手机上按下按键时给一次极短的轻振，水晶键的「按进去」更有实感；电脑端无效果</span></span>' +
+      '<span class="switch' + (hapticsOn ? ' on' : '') + '"><i></i></span>' +
+      '</button>' +
+      '<button class="setting-item neu press" data-weather-toggle type="button">' +
+      '<span class="icon-box">' + UI.icon('eye') + '</span>' +
+      '<span class="s-main"><span class="s-title">背景跟随当日天气</span>' +
+      '<span class="s-desc">按当天天气换背景形态：晴天白云、阴天灰白玻璃云、雨天淡蓝雨丝、雪天玻璃雪花；' +
+      '每天联网查一次天气，只用于背景，不显示也不保存天气数据</span></span>' +
+      '<span class="switch' + (weatherBg ? ' on' : '') + '"><i></i></span>' +
       '</button>' +
       '</div>' +
 
@@ -3116,7 +3142,7 @@
       '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>' +
 
       '<div class="section-title"><span>关于</span></div>' +
-      '<div class="notice info">工作文件 · 本地档案版 v2.3 · 数据不上传，无账号，无云端。' +
+      '<div class="notice info">工作文件 · 本地档案版 v2.27 · 数据不上传，无账号，无云端。' +
       '<br>可添加到手机主屏幕，像应用一样全屏使用。</div>';
   }
 
@@ -4521,6 +4547,7 @@
           fold.classList.toggle('open', open);
           kwFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
           state.schedule.kwOpen = open;
+          try { await DB.setSetting('scheduleKwOpen', open); } catch (err) { /* 记不住就只影响下次进来 */ }
         }
         return;
       }
@@ -5025,6 +5052,24 @@
       }
 
       if (e.target.closest('[data-export-backup]')) { doExport(); return; }
+
+      if (e.target.closest('[data-haptics-toggle]')) {
+        const on = (await DB.getSetting('haptics', true)) === false;
+        await DB.setSetting('haptics', on);
+        if (window.App && App.setHaptics) App.setHaptics(on);
+        UI.toast(on ? '已开启按键触感反馈' : '已关闭按键触感反馈', 'ok');
+        await render('settings');
+        return;
+      }
+
+      if (e.target.closest('[data-weather-toggle]')) {
+        const on = (await DB.getSetting('weatherBg', true)) === false;
+        await DB.setSetting('weatherBg', on);
+        if (window.App && App.setWeatherBg) await App.setWeatherBg(on);
+        UI.toast(on ? '背景已按当天天气显示' : '背景已固定为晴天样式', 'ok');
+        await render('settings');
+        return;
+      }
 
       if (e.target.closest('[data-rowpanel-toggle]')) {
         state.searchRowPanel = !state.searchRowPanel;
