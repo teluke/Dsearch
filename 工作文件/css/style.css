@@ -3889,16 +3889,17 @@ select.input { background-color: rgba(255, 255, 255, .9); }
   .setting-item .s-desc, .notice, .result p, .empty p, .kw-ctx { overflow-wrap: anywhere; }
 }
 
-/* 切换视图时先渲染再动画：JS 只在合成层推 transform / opacity。 */
+/* 切页只推 transform：整页淡入会把亮天空透上来，观感像爆闪。
+   页面始终不透明，动画期间背景亮度恒定。 */
 .view.active { animation: none !important; will-change: auto; }
-.view.view-slide { will-change: transform, opacity; }
+.view.view-slide { will-change: transform; }
 @keyframes viewPushNext {
-  from { opacity: .48; transform: translate3d(18px, 0, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
+  from { transform: translate3d(18px, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
 }
 @keyframes viewPushPrev {
-  from { opacity: .48; transform: translate3d(-18px, 0, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
+  from { transform: translate3d(-18px, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
 }
 /* 滚动顺滑：去掉整页固定渐变，避免每帧重绘；顶栏模糊降一档。 */
 html, body { background-attachment: scroll !important; }

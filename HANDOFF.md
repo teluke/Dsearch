@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 18:42 ｜ 当前版本：**v2.34.0** ｜ 缓存：`gongzuowenjian-v79`
+> 最后更新：2026-11-27 19:22 ｜ 当前版本：**v2.35.0** ｜ 缓存：`gongzuowenjian-v80`
 
 ---
 
@@ -52,10 +52,10 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.34.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.34.0`
-- SW 缓存 `gongzuowenjian-v79`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.34.0`（commit `b43912b`），已推 `origin/main`，Pages 已生效
-- 工作区干净，无未提交改动
+- 版本 `APP_VERSION = '2.35.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.35.0`
+- SW 缓存 `gongzuowenjian-v80`，清单已含 `./css/sky.css`、`./js/weather.js`
+- Git：tag `v2.34.0`（commit `b43912b`）为上一版；v2.35.0 待提交
+- 当前改动：切页动画去 opacity + 导航串行化
 
 ---
 
@@ -195,6 +195,12 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 ### v2.29.0 — 云影 + 视差
 见 4.4 / 4.6。
 
+### v2.35.0 — 爆闪逻辑根治 / 导航串行化
+1. `playViewPush()` 关键帧删掉 `opacity`，只保留 `transform: translate3d(±20px)→0`；`.view-slide` 的 `will-change` 同步去掉 opacity。整页从第一帧起不透明，亮天空不再透上来
+2. `switchTab()` 拆成入队包装 + `switchTabNow()`：上一个 `Views.go()` 没完成时后续点击排队，旧任务不会抢回页面；导航点击/hashchange 改看真实 active 页与队尾目标，不再信 `Views.state.tab`
+3. 不变量：任意时刻有且只有一张 active 页、active 页 opacity 恒为 1、渲染等待期旧页仍在、动画只推 transform
+4. `audit-v235.js` 15 项全过；全量回归零失败
+
 ### v2.34.0 — 切页无空白 / 云匀速 / 设置页七抽屉
 1. `switchTab()` 改为旧页留到新页渲染完成再撤；目标页 `.view-waiting` 脱离文档流、保留布局宽度，修掉切页时只剩亮天空的爆闪
 2. 云浮动改全程 `linear` 往返（48/62/76s），去掉缓动停顿；云影仍同步、低动效仍关闭
@@ -238,7 +244,7 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 
 ```bash
 cd .workbuddy/pw
-node audit-v234.js
+node audit-v235.js
 ```
 
 跑前先 `node server.js` 起 5173 服务。
@@ -247,6 +253,7 @@ node audit-v234.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
+| `audit-v235.js` | 15 | 整页动画无 opacity、逐帧 opacity=1、连点串行化、异步等待期旧页仍在、低动效 |
 | `audit-v234.js` | 16 | 切页渲染中旧页可见、目标页离屏有宽度、匀速浮动、七块抽屉与状态记忆 |
 | `audit-v233.js` | 25 | 等比铺图、手机端避开顶栏、桌面淡化、上下浮动与云影同步 |
 | `audit-v232.js` | 22 | 小狗云完整性、无缝轨迹、影层无方块、灰阶与手机收敛（v233 起影层断言扣浮动量） |\n| `audit-v231.js` | 24 | 云影视差同步、三款新云、折叠对象、字号分级、iOS 式切换 |
@@ -291,7 +298,7 @@ node audit-v234.js
 6. **选中态写在主色规则之前会被覆盖**，拆成「默认凸起」与「已选中内凹」两套。
 7. **Python 生成器里 `%` 要转义**：SVG 里的 `x="-60%"` 在 `%` 格式化字符串里必须写 `%%`。
 8. **`make-sky2.py` 的 `%s` 占位符别拼在 `%` 之后**，否则四个天气全回落到晴天。
-9. **切页渲染期间别撤掉旧页**：v2.34 前 `switchTab()` 先给旧页去 `active`、再等 `Views.go()` 异步渲染，中间两页都不显示，只剩亮天空 → 用户看到「爆闪」。现在旧页保持可见，目标页加 `.view-waiting`（`position:absolute` 离屏、保留宽度供预览读 `clientWidth`），渲染完才换页；改这段时别把 `view-waiting` 改回 `display:none`。
+9. **切页两个坑，别只修一个**：① v2.34 前渲染等待期两页皆空，只剩亮天空；现在旧页保持可见，目标页 `.view-waiting`（`position:absolute` 离屏、保留宽度读 `clientWidth`），渲染完才换页，别把 `view-waiting` 改回 `display:none`。② v2.35 发现 `playViewPush()` 的整页 `opacity .45→1` 才是残留爆闪——页面透明，淡入时亮天空透上来；关键帧只留 `transform`，`will-change` 也别写 opacity。`switchTab()` 必须串行入队，连点时旧任务不能抢回 active；判断当前页看真实 `.view.active`，别信 `Views.state.tab`（它在 `go()` 开头就改了）。
 
 ---
 

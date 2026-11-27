@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.34.0';
+  window.APP_VERSION = '2.35.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -57,22 +57,37 @@
     if (fold) fold.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
-  /* iOS 式页面切换：先把目标页渲染完再放出来，动画只跑合成层的 transform / opacity。
-     旧版一边播动画一边往 DOM 里塞内容，长列表会在动画中途重排，所以看着一顿一顿。 */
+  /* iOS 式页面切换：先把目标页渲染完再放出来。
+     动画只推 transform，绝不动整页 opacity —— 页面本身透明，淡入时亮天空会透上来，
+     看起来就是背景爆闪；推入期间始终由一张不透明的完整页面盖住背景。 */
   function playViewPush(target, forward) {
     if (!target || !target.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     target.classList.remove('view-waiting');
     target.classList.add('view-slide');
     const anim = target.animate([
-      { opacity: .45, transform: 'translate3d(' + (forward ? 20 : -20) + 'px, 0, 0)' },
-      { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+      { transform: 'translate3d(' + (forward ? 20 : -20) + 'px, 0, 0)' },
+      { transform: 'translate3d(0, 0, 0)' }
     ], { duration: 260, easing: 'cubic-bezier(.22, .8, .24, 1)' });
     anim.finished.then(function () { target.classList.remove('view-slide'); })
       .catch(function () { target.classList.remove('view-slide'); });
   }
 
-  async function switchTab(tab, updateHash) {
+  /* 切页串行化：连点时若上一个 Views.go() 还在 await，后一次切页必须排在后面，
+     否则旧任务会在新任务之后把旧页重新标成 active，出现空档和闪白。 */
+  let navQueue = Promise.resolve();
+  let desiredTab = null;
+
+  function switchTab(tab, updateHash) {
     if (TABS.indexOf(tab) < 0) tab = 'home';
+    desiredTab = tab;
+    const job = navQueue.then(function () { return switchTabNow(tab, updateHash); });
+    navQueue = job.catch(function () { /* 单次失败不阻塞后续导航 */ });
+    return job;
+  }
+
+  async function switchTabNow(tab, updateHash) {
+    if (TABS.indexOf(tab) < 0) tab = 'home';
+    desiredTab = tab;
     const oldView = document.querySelector('.view.active');
     const oldTab = oldView ? oldView.getAttribute('data-tab') : null;
     const target = document.querySelector('.view[data-tab="' + tab + '"]');
@@ -502,7 +517,9 @@
     $$('.nav-item').forEach(function (t) {
       t.addEventListener('click', function () {
         const tab = t.getAttribute('data-tab');
-        if (tab === Views.state.tab && document.querySelector('.view.active')) { closeNav(); return; }
+        const active = document.querySelector('.view.active');
+        /* 不比 Views.state.tab：它在 Views.go() 开头就改了，排队中的切页会被误判成「当前页」 */
+        if (tab === (active ? active.getAttribute('data-tab') : null)) { closeNav(); return; }
         switchTab(tab, true);
       });
     });
@@ -567,7 +584,9 @@
 
     window.addEventListener('hashchange', function () {
       const tab = tabFromHash();
-      if (tab !== Views.state.tab) switchTab(tab, false);
+      const active = document.querySelector('.view.active');
+      const current = active ? active.getAttribute('data-tab') : null;
+      if (tab !== current && tab !== desiredTab) switchTab(tab, false);
     });
 
     window.addEventListener('resize', function () {
