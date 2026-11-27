@@ -54,9 +54,9 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
 .sky-cloud.c3 { height: 46%; background-image: var(--cloud-c); opacity: .62; animation: skyDrift 540s linear infinite; }
 .sky-cloud.c2 { height: 56%; top: 3%; background-image: var(--cloud-b); opacity: .84; animation: skyDrift 400s linear infinite; }
 .sky-cloud.c1 { height: 64%; top: 8%; background-image: var(--cloud-a); opacity: .96; animation: skyDrift 285s linear infinite; }
-:root[data-weather="cloudy"] .sky-cloud.c3 { background-image: var(--cloud-c-grey); opacity: .70; }
-:root[data-weather="cloudy"] .sky-cloud.c2 { background-image: var(--cloud-b-grey); opacity: .86; }
-:root[data-weather="cloudy"] .sky-cloud.c1 { background-image: var(--cloud-a-grey); opacity: .97; }
+:root[data-weather="cloudy"] .sky-clouds .sky-cloud.c3 { background-image: var(--cloud-c-grey); opacity: .70; }
+:root[data-weather="cloudy"] .sky-clouds .sky-cloud.c2 { background-image: var(--cloud-b-grey); opacity: .86; }
+:root[data-weather="cloudy"] .sky-clouds .sky-cloud.c1 { background-image: var(--cloud-a-grey); opacity: .97; }
 
 @keyframes skyDrift {
   from { transform: translate3d(0, 0, 0); }
@@ -188,14 +188,51 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
   to   { transform: rotate(var(--sheet-tilt, -8deg)) translate3d(calc(var(--sheet-p, 330px) * -1), 0, 0); }
 }
 
-/* ---------- v2.29 云影：三层云各投一层软暗影 ----------
+/* ---------- 云影：三层云各投一层软暗影 ----------
    云影图把「轮廓 + 高斯模糊」直接烘进 SVG（不靠运行时 filter），
-   用与云完全相同的 skyDrift 动画 → 影子和云同步漂移，只往右下错开一点。 */
-.sky-shadows { position: absolute; inset: 0; pointer-events: none; transition: opacity 1.2s ease; --tile-w: 1600px; }
-.sky-shadows .sky-cloud { translate: 8px 38px; }
-.sky-shadows .c3 { background-image: var(--cloud-shadow-c); opacity: .14; translate: 14px 20px; }
-.sky-shadows .c2 { background-image: var(--cloud-shadow-b); opacity: .20; translate: 10px 26px; }
-.sky-shadows .c1 { background-image: var(--cloud-shadow-a); opacity: .24; translate: 8px 32px; }
+   用与云完全相同的 skyDrift 动画 → 影子和云同步漂移。
+
+   v2.30：影子开始有「光源」。三组变量拆开：
+   --sh-dx  横向比例（晴天往右下偏，阴天几乎只往下）
+   --sh-dy  纵向比例
+   --sh-len 影子长度：太阳低（早/晚）拉长，正午压短
+   --sh-k   深浅：晴天光硬、阴天光散 */
+.sky-shadows {
+  position: absolute; inset: 0; pointer-events: none;
+  transition: opacity 1.2s ease; --tile-w: 1600px;
+  --sh-dx: 1; --sh-dy: 1; --sh-len: 1; --sh-k: 1;
+}
+.sky-shadows .sky-cloud { translate: 30px 24px; transition: translate .9s cubic-bezier(.32, .7, .28, 1); }
+
+/* 晴天：太阳固定在左上，影子统一压向右下 */
+:root[data-weather="sunny"] .sky-shadows { --sh-dx: 1; --sh-dy: .78; --sh-k: 1.16; }
+/* 阴天：光被云层打散，影子基本落在正下方，更淡更短 */
+:root[data-weather="cloudy"] .sky-shadows { --sh-dx: .1; --sh-dy: 1.1; --sh-len: .92; --sh-k: .82; }
+
+/* 按一天中的时段给影子调长度与偏角：太阳越低影子越长 */
+:root[data-daypart="morning"] .sky-shadows { --sh-len: 1.22; --sh-dy: 1.05; }
+:root[data-daypart="midday"] .sky-shadows { --sh-len: .74; --sh-dy: .62; }
+:root[data-daypart="afternoon"] .sky-shadows { --sh-len: 1.08; --sh-dy: .82; }
+:root[data-daypart="evening"] .sky-shadows { --sh-len: 1.3; --sh-dy: 1; }
+:root[data-daypart="night"] .sky-shadows { --sh-len: .66; --sh-dy: .6; --sh-k: .66; }
+
+/* 三层同比例缩放：远层薄而短，近层厚而长 */
+.sky-shadows .sky-cloud.c3 {
+  background-image: var(--cloud-shadow-c);
+  opacity: calc(.14 * var(--sh-k));
+  translate: calc(30px * var(--sh-dx) * .52) calc(24px * var(--sh-dy) * var(--sh-len) * .62);
+}
+.sky-shadows .sky-cloud.c2 {
+  background-image: var(--cloud-shadow-b);
+  opacity: calc(.20 * var(--sh-k));
+  translate: calc(30px * var(--sh-dx) * .78) calc(24px * var(--sh-dy) * var(--sh-len) * .84);
+}
+.sky-shadows .sky-cloud.c1 {
+  background-image: var(--cloud-shadow-a);
+  opacity: calc(.24 * var(--sh-k));
+  translate: calc(30px * var(--sh-dx)) calc(24px * var(--sh-dy) * var(--sh-len));
+}
+
 :root[data-weather="rain"] .sky-shadows,
 :root[data-weather="snow"] .sky-shadows { opacity: 0; }
 
@@ -212,9 +249,21 @@ html { background-color: var(--sky-base); transition: background-color .6s ease;
 :root[data-weather="rain"] .sky-precip i:nth-child(3),
 :root[data-weather="snow"] .sky-precip i:nth-child(3) { --px: 24px; --py: 15px; }
 
+/* ---------- v2.30 云层视差：同一套 --wx / --wy，三层各按远近反向轻移 ----------
+   指针往右，云往左偏一点点（背景与前景反向 = 有纵深）。
+   幅度只有 2~4px，远层几乎不动、近层跟手，绝不和 skyDrift 的平移抢 transform：
+   漂移用 transform，视差用独立的 translate 属性，两条互不干扰。 */
+.sky-clouds .c3,
+.sky-clouds .c2,
+.sky-clouds .c1 { transition: translate .55s cubic-bezier(.32, .7, .28, 1); }
+.sky-clouds .c3 { translate: calc(var(--wx, 0) * -2px) calc(var(--wy, 0) * -1.2px); }
+.sky-clouds .c2 { translate: calc(var(--wx, 0) * -3px) calc(var(--wy, 0) * -1.8px); }
+.sky-clouds .c1 { translate: calc(var(--wx, 0) * -4px) calc(var(--wy, 0) * -2.4px); }
+
 /* 低动效偏好：停在原地，只保留静态天气配色 */
 @media (prefers-reduced-motion: reduce) {
   .sky-cloud, .sky-precip i,
   .sky-precip::before, .sky-precip::after { animation: none !important; }
   .sky-precip i { translate: none !important; }
+  .sky-clouds .sky-cloud { translate: none !important; }
 }

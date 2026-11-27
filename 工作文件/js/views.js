@@ -13,7 +13,7 @@
     events: { seriesId: null, seg: 'cycle', visible: 100 },
     search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
     home: { day: '' },
-    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null, kwOpen: false },
+    schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null, kwOpen: false, weekOpen: false },
     loaded: false,
     memoEditId: null,
     docs: [],
@@ -56,6 +56,7 @@
       sc.seriesName = (await DB.getSetting('scheduleSeriesName', '课表')) || '课表';
       sc.fieldKeywords = Object.assign(defaultFieldKeywords(), (await DB.getSetting('scheduleFieldKeywords', {})) || {});
       sc.kwOpen = (await DB.getSetting('scheduleKwOpen', false)) === true;
+      sc.weekOpen = (await DB.getSetting('scheduleWeekOpen', false)) === true;
       const savedMulti = await DB.getSetting('scheduleActiveKeywords', null);
       if (Array.isArray(savedMulti)) {
         sc.activeKeywords = savedMulti.filter(function (k) { return !!String(k || '').trim(); });
@@ -88,6 +89,7 @@
       scheduleSeriesName: sc.seriesName,
       scheduleFieldKeywords: sc.fieldKeywords || defaultFieldKeywords(),
       scheduleKwOpen: !!sc.kwOpen,
+      scheduleWeekOpen: !!sc.weekOpen,
       scheduleActiveKeywords: sc.activeKeywords || [],
       scheduleActiveKeyword: (sc.activeKeywords || [])[0] || ''
     });
@@ -564,6 +566,53 @@
       '</div>';
   }
 
+  /* 首页「今日课表」：直接读课表页那套提取结果，只取今天这一天的课。
+     换掉原来的「内容关键词关联」——那张表看一次就够，课表是每天要看的。 */
+  function todayScheduleCard(todayStr) {
+    const docs = scheduleSelectedDocs();
+    const dayIdx = weekdayIndex(todayStr);
+    const sc = state.schedule;
+    const week = (sc.week == null || sc.week === '') ? 1 : sc.week;
+    const link = '<button class="section-link" data-nav="schedule" type="button">查看课表' + UI.icon('chev') + '</button>';
+
+    if (!docs.length) {
+      return '<div class="section-title"><span>今日课表</span><span class="title-side">' + link + '</span></div>' +
+        '<div class="today-card neu today-empty">' +
+        '<div class="te-title">还没有课表文件</div>' +
+        '<div class="te-desc">在「课表」页点「选择文件」加入本学期的课表，这里每天显示当天要上的课。</div>' +
+        '</div>';
+    }
+
+    const picked = coursesFor(dayIdx, week, docs);
+    const courses = picked.courses.filter(function (c) { return c && (c.name || c.period); });
+    const countText = courses.length ? '第 ' + week + ' 周 · ' + courses.length + ' 节' : '第 ' + week + ' 周';
+
+    let body;
+    if (!courses.length) {
+      body = '<div class="today-card neu today-empty">' +
+        '<div class="te-title">' + SCHEDULE_DAYS[dayIdx] + '没有课</div>' +
+        '<div class="te-desc">' + (picked.kwMode
+          ? '关键词「' + esc(picked.activeKws.join(' + ')) + '」在第 ' + week + ' 周 ' + SCHEDULE_DAYS[dayIdx] + '没有命中。'
+          : '第 ' + week + ' 周这一天的排课是空的。') +
+        '点「查看课表」可以切周次或日期核对。</div>' +
+        '</div>';
+    } else {
+      body = '<div class="today-card neu">' + courses.map(function (c) {
+        const period = /^\d/.test(String(c.period)) ? '第 ' + c.period + ' 节' : String(c.period || '');
+        const meta = [c.room, c.teacher].filter(Boolean).join(' · ');
+        return '<button class="today-row" data-nav="schedule" type="button">' +
+          '<span class="tc-period">' + esc(period) + '</span>' +
+          '<span class="tc-main"><span class="tc-name">' + esc(String(c.name || '未命名课程')) + '</span>' +
+          (meta ? '<span class="tc-meta">' + esc(meta) + '</span>' : '') +
+          '</span></button>';
+      }).join('') + '</div>';
+    }
+
+    return '<div class="section-title"><span>今日课表</span><span class="title-side">' +
+      '<span class="count">' + esc(countText) + '</span>' + link +
+      '</span></div>' + body;
+  }
+
   async function homeHtml(todayStr) {
     const totalBytes = state.docs.reduce(function (s, d) { return s + (d.size || 0); }, 0);
     const memos = await DB.listMemos();
@@ -621,9 +670,6 @@
 
     /* 周历：周一 → 周日 + 每日待办；点日期筛选当天待办 */
     const calHtml = weekCalendarHtml(events, memos, todayStr, dayFilter);
-
-    /* 关键词自动关联：从文档正文提取；用户自选的词优先展示 */
-    const kw = Keywords.build(state.docs, { title: '内容关键词关联', pinned: state.kwPinned || [] });
 
     /* 近一周项目：归档日期在最近 7 天内，按系列分组 */
     const start = new Date();
@@ -704,7 +750,7 @@
         ? '<div class="ev-restore"><span>已删除 ' + removedEventCount() + ' 期事件</span>' +
           '<button class="section-link" data-ev-restore type="button">恢复全部' + UI.icon('chev') + '</button></div>'
         : '') +
-      (kw.html ? kw.html : '') +
+      todayScheduleCard(todayStr) +
       '<div class="section-title"><span>本周日程</span><span class="count">点日期看当天</span></div>' +
       calHtml +
       '<div class="section-title" id="weekAnchor"><span>近一周项目</span><span class="title-side">' +
@@ -1585,16 +1631,20 @@
   function scheduleFilePreviewHtml(docs, previewId, seriesNameText) {
     if (!docs.length) {
       return emptyBlock('「' + esc(seriesNameText || '课表') + '」系列里还没有文件',
-        '点右上角的文件图标，可修改系列名或勾选该系列里的文件');
+        '点「原文件放大」右侧的「选择文件」，加入课表文件');
     }
     const d = scheduleDocById(previewId) || docs[0];
     const kind = Parser.kindOf(d.name);
-    return '<div class="sched-file neu">' +
+    /* 图片、PDF 才有得看：其余格式（xls、docx…）只留一行说明，模块按文字高度收起，
+       不再撑出一个 260px 的空框等人点 */
+    const canInline = kind === 'image' || kind === 'pdf';
+    return '<div class="sched-file neu' + (canInline ? '' : ' plain') + '">' +
       '<div class="sf-head"><span class="icon-box ' + kind + '">' + UI.icon(UI.kindIcon(kind)) + '</span>' +
       '<span class="sf-name">' + esc(d.name) + '</span>' +
       '<button class="btn" data-sched-zoom="' + d.id + '" type="button">' + UI.icon('search') + '放大查看</button></div>' +
-      '<div class="sf-stage" id="schedStage" data-doc="' + d.id + '"><div class="sf-empty">载入中…</div></div>' +
-      '</div>' +
+      '<div class="sf-stage' + (canInline ? '' : ' compact') + '" id="schedStage" data-doc="' + d.id + '">' +
+      (canInline ? '<div class="sf-empty">载入中…</div>' : '<div class="sf-empty">这种格式不能内嵌预览，点「放大查看」用系统应用打开</div>') +
+      '</div></div>' +
       '<div class="sched-docbar">' + docs.map(function (x) {
         return '<button class="sdoc' + (x.id === d.id ? ' on' : '') + '" data-sched-pick="' + x.id + '" type="button">' +
           esc(x.name) + '</button>';
@@ -1636,18 +1686,10 @@
     return list.every(function (k) { return courseTextMatchesKeyword(c, k); });
   }
 
-  /* 课表页：周条选日期、周次按键选周，课程按「选中日 + 选中周」过滤 */
-  function scheduleHtml(todayStr) {
+  /* 某一天、某一周的课程：自动提取 + 关键词命中行 + 手动覆盖 + 周次过滤。
+     课表页和首页「今日课表」都走这一份，两边不会各算一套。 */
+  function coursesFor(dayIdx, week, docs) {
     const sc = state.schedule;
-    const docs = scheduleSelectedDocs();
-    const todayIdx = weekdayIndex(todayStr);
-    const dayIdx = sc.day == null ? todayIdx : sc.day;
-    const isToday = dayIdx === todayIdx;
-    const curWeek = (sc.week == null || sc.week === '') ? 1 : sc.week;
-    const week = sc.viewWeek || curWeek;
-    const sameAsToday = isToday && week === curWeek;
-    const monday = mondayOf(todayStr);
-    const dayDate = dateOffset(monday, dayIdx);
     const activeKws = currentScheduleKeywords();
     const kwMode = activeKws.length > 0;
 
@@ -1675,6 +1717,30 @@
     const otherDayCount = rowMode
       ? courses.filter(function (c) { return !c.today; }).length : 0;
     if (rowMode) courses = courses.filter(function (c) { return c.today; });
+
+    return { courses: courses, rowMode: rowMode, weekEmpty: weekEmpty, otherDayCount: otherDayCount, kwMode: kwMode, activeKws: activeKws };
+  }
+
+  /* 课表页：周条选日期、周次按键选周，课程按「选中日 + 选中周」过滤 */
+  function scheduleHtml(todayStr) {
+    const sc = state.schedule;
+    const docs = scheduleSelectedDocs();
+    const todayIdx = weekdayIndex(todayStr);
+    const dayIdx = sc.day == null ? todayIdx : sc.day;
+    const isToday = dayIdx === todayIdx;
+    const curWeek = (sc.week == null || sc.week === '') ? 1 : sc.week;
+    const week = sc.viewWeek || curWeek;
+    const sameAsToday = isToday && week === curWeek;
+    const monday = mondayOf(todayStr);
+    const dayDate = dateOffset(monday, dayIdx);
+
+    const picked = coursesFor(dayIdx, week, docs);
+    const courses = picked.courses;
+    const rowMode = picked.rowMode;
+    const weekEmpty = picked.weekEmpty;
+    const otherDayCount = picked.otherDayCount;
+    const kwMode = picked.kwMode;
+    const activeKws = picked.activeKws;
 
     const courseHtml = courses.length
       ? (rowMode
@@ -1715,7 +1781,7 @@
               '没有命中，其他日期还有 ' + otherDayCount + ' 节，点上方日期条切过去看'
             : '关键词「' + esc(activeKws.join(' + ')) + '」在原表里没有命中任何行，点「查看原表」核对表头写法')
           : '点「编辑课程」手动填写，或检查关键词设置')
-        : '先点右上角文件图标加入课表文件');
+        : '先点「原文件放大」右侧的「选择文件」加入课表');
 
     const dayWord = sameAsToday ? '今日' : '当天';
     const countText = rowMode
@@ -1739,16 +1805,29 @@
         '" type="button" aria-pressed="' + (w === week ? 'true' : 'false') + '">' + w + '</button>';
     }
 
-    /* 关键词行折叠：默认收起，只留当前生效的词，点一下铺开全部可拖动的词签 */
+    /* 两个折叠面板并排：周次在左、关键词在右，点开谁谁在下方铺一整行。
+       收起时只留「第 N 周」「当前词」，顶栏腾出来，课表主体上移。 */
     const kwOpen = !!sc.kwOpen;
+    const wkOpen = !!sc.weekOpen;
     const kwCurText = activeKws.length ? activeKws.join(' + ')
       : ((sc.keywords || []).length ? '未选取' : '未设置');
-    const kwFoldHtml = '<div class="kw-fold' + (kwOpen ? ' open' : '') + '">' +
+    const foldsHtml = '<div class="sched-folds' + (kwOpen ? ' kw-open' : '') + (wkOpen ? ' wk-open' : '') + '">' +
+      '<div class="wk-fold' + (wkOpen ? ' open' : '') + '">' +
+      '<button class="wk-fold-head" data-sched-week-fold type="button" aria-expanded="' + (wkOpen ? 'true' : 'false') +
+      '" aria-controls="schedWeekLine" title="展开/收起周次">' +
+      '<span class="kf-title">周次</span>' +
+      '<span class="kf-cur">第 ' + esc(String(week)) + ' 周</span>' +
+      '<i class="kf-chev">' + UI.icon('chev') + '</i></button>' +
+      '</div>' +
+      '<div class="kw-fold' + (kwOpen ? ' open' : '') + '">' +
       '<button class="kw-fold-head" data-sched-kw-fold type="button" aria-expanded="' + (kwOpen ? 'true' : 'false') +
       '" aria-controls="schedKwLine" title="展开/收起关键词">' +
       '<span class="kf-title">关键词</span>' +
       '<span class="kf-cur">' + esc(kwCurText) + '</span>' +
       '<i class="kf-chev">' + UI.icon('chev') + '</i></button>' +
+      '</div>' +
+      '<div class="wk-strip week-strip" id="schedWeekLine" role="group" aria-label="按周次查看课程">' +
+      '<div class="ws-scroll">' + weekChips + '</div></div>' +
       '<div class="sched-kwline" id="schedKwLine">' +
       (sc.keywords || []).slice(0, 14).map(function (k, i) {
         const on = activeKws.indexOf(k) >= 0;
@@ -1761,10 +1840,6 @@
 
     return '<div class="topbar"><div>' +
       '<p class="meta">课表 · ' + esc(todayStr) + '</p>' +
-      '</div><div class="topbar-actions">' +
-      '<button class="icon-btn neu press" data-sched-docs type="button" aria-label="选择课表文件" title="选择课表文件">' + UI.icon('file') + '</button>' +
-      '<button class="icon-btn neu press" data-sched-kw type="button" aria-label="编辑提取关键词" title="编辑提取关键词">' + UI.icon('search') + '</button>' +
-      '<button class="icon-btn neu press toggle' + (sc.useAuto ? '' : ' on') + '" data-sched-mode type="button" aria-label="切换提取或编辑" title="切换提取或编辑">' + UI.icon('edit') + '</button>' +
       '</div></div>' +
       '<div class="sched-hero neu">' +
       '<div class="sh-top"><div class="sh-main">' +
@@ -1778,21 +1853,21 @@
       '<div class="sw-days">' + daysHtml + '</div>' +
       '<p class="sw-range">' + mdOf(monday) + ' - ' + mdOf(dateOffset(monday, 6)) + '</p>' +
       '</div>' +
-      '<div class="week-strip" role="group" aria-label="按周次查看课程">' +
-      '<span class="ws-label">周次</span><div class="ws-scroll">' + weekChips + '</div></div>' +
-      kwFoldHtml +
+      foldsHtml +
       '<div class="section-title"><span>' + esc(sameAsToday ? '今日课程' : SCHEDULE_DAYS[dayIdx] + ' · 第 ' + week + ' 周') + '</span><span class="title-side">' +
       '<span class="count">' + esc(countText) + '</span>' +
       (kwMode ? '<button class="section-link" data-sched-kw-rows type="button" title="查看选中关键词对应的原始表格行">查看原表' + UI.icon('chev') + '</button>' : '') +
       '</span></div>' +
       (weekEmpty ? '<p class="sched-weekhint">这一天的课周次对不上第 ' + week +
-        ' 周，先按全部列出；点右上「第 ' + curWeek + ' 周」改成实际教学周即可对上</p>' : '') +
+        ' 周，先按全部列出；点上方「周次」改成实际教学周即可对上</p>' : '') +
       '<div class="sched-list' + (rowMode ? ' kwc-list' : '') + '">' + courseHtml + '</div>' +
       '<div class="sched-actions">' +
       '<button class="btn" data-sched-edit type="button">' + UI.icon('edit') + '编辑课程</button>' +
       '<button class="btn' + (sc.useAuto ? '' : ' primary') + '" data-sched-mode type="button">' + (sc.useAuto ? '切换到手动编辑' : '直接使用提取结果') + '</button>' +
       '</div>' +
-      '<div class="section-title"><span>原文件放大</span><span class="count">' + esc(sc.seriesName) + ' 系列 · ' + docs.length + ' 份</span></div>' +
+      '<div class="section-title"><span>原文件放大</span><span class="title-side"><span class="count">' + esc(sc.seriesName) + ' 系列 · ' + docs.length + ' 份</span>' +
+      '<button class="section-link" data-sched-docs type="button" title="改系列名或勾选课表文件">选择文件' + UI.icon('chev') + '</button>' +
+      '</span></div>' +
       scheduleFilePreviewHtml(docs, sc.previewId, sc.seriesName);
   }
 
@@ -2068,7 +2143,7 @@
       .map(function (w) { return String(w || '').trim(); }).filter(Boolean);
     if (!words.length) return;
     const docs = scheduleSelectedDocs();
-    if (!docs.length) { UI.toast('先点右上角文件图标加入课表文件'); return; }
+    if (!docs.length) { UI.toast('先点「原文件放大」右侧的「选择文件」加入课表'); return; }
     const collected = scheduleKeywordRowsCached(words);
     let head = collected.head;
     const rows = collected.rows;
@@ -2415,7 +2490,7 @@
     const title = '<div class="section-title"><span>匹配结果</span><span class="count">' + countText + '</span></div>';
     if (!q) {
       return title + filterBarHtml() +
-        emptyBlock('输入关键词开始查找', '在顶部搜索栏输入即可，文件名、字段值、文档正文、图片中的文字都会参与匹配');
+        emptyBlock('输入关键词开始查找', '在上方搜索框输入即可，文件名、字段值、文档正文、图片中的文字都会参与匹配');
     }
     if (!searchResults.length) {
       return title + filterBarHtml() +
@@ -2486,12 +2561,53 @@
     }).join('');
 
     return '<div class="topbar"><div>' +
-      '<p class="meta">' + (q ? '正在检索「' + esc(q) + '」· 关键词检索文件名、字段、正文与图片文字' : '在顶部搜索栏输入关键词') + '</p>' +
+      '<p class="meta">' + (q ? '正在检索「' + esc(q) + '」· 关键词检索文件名、字段、正文与图片文字' : '输入关键词，检索文件名、字段、正文与图片文字') + '</p>' +
+      '</div></div>' +
+      '<div class="page-search"><div class="search-shell">' +
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15 15l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>' +
+      '<input id="pageSearch" type="search" placeholder="搜索文件名、正文内容…" autocomplete="off" aria-label="信息查询搜索" value="' + esc(state.search.q || '') + '">' +
       '</div></div>' +
       '<div class="chip-scroll" style="margin-top:12px"><div class="chips" data-chips><span class="chip-bg"></span>' + seriesChips + '</div></div>' +
       '<div class="chip-scroll" style="margin-top:8px"><div class="chips" data-chips><span class="chip-bg"></span>' + typeChips + '</div></div>' +
       seriesDocPanelHtml() +
-      '<div id="searchResults" style="margin-top:6px">' + searchResultsHtml() + '</div>';
+      '<div id="searchResults" style="margin-top:6px">' + searchResultsHtml() + '</div>' +
+      kwCardHtml();
+  }
+
+  /* 内容关键词关联表：从主页搬来查询页，主页那块位置让给当日课表 */
+  function kwCardHtml() {
+    try {
+      const kw = Keywords.build(state.docs, { title: '内容关键词关联', pinned: state.kwPinned || [] });
+      return kw && kw.html ? '<div class="kw-block">' + kw.html + '</div>' : '';
+    } catch (e) { return ''; }
+  }
+
+  /* 信息查询页自带的输入框：顶栏搜索栏不在这页出现了，输入逻辑保持一致 */
+  function bindPageSearch(section) {
+    const input = section.querySelector('#pageSearch');
+    if (!input) return;
+    let timer = null;
+    const after = function () {
+      const next = document.querySelector('#view-search #pageSearch');
+      if (next && document.activeElement !== next) {
+        try { next.focus({ preventScroll: true }); } catch (e) { /* 忽略 */ }
+        next.setSelectionRange(next.value.length, next.value.length);
+      }
+    };
+    input.addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(async function () {
+        if (input.value === state.search.q) return;
+        await setSearchQuery(input.value);
+        after();
+      }, 280);
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      clearTimeout(timer);
+      setSearchQuery(input.value).then(after);
+    });
   }
 
   /* 外部（全局搜索栏 / 关键词关联表）设置关键词 */
@@ -2973,6 +3089,21 @@
 
   /* ---------- 设置 ---------- */
 
+  /* 设置页的抽屉：标题行就是分区标题（蓝色小竖条 + 手写体），点一下展开内容。
+     状态记在 settings.settingsFolds 里，下次进来还是上次的样子。 */
+  function setFoldSection(key, title, countText, bodyHtml, open) {
+    return '<div class="set-fold' + (open ? ' open' : '') + '">' +
+      '<button class="section-title set-fold-head" data-set-fold="' + key + '" type="button" aria-expanded="' +
+      (open ? 'true' : 'false') + '" aria-controls="setBody-' + key + '">' +
+      '<span>' + esc(title) + '</span>' +
+      '<span class="title-side">' +
+      (countText ? '<span class="count">' + esc(countText) + '</span>' : '') +
+      '<i class="sf-chev" aria-hidden="true">' + UI.icon('chev') + '</i>' +
+      '</span></button>' +
+      '<div class="set-fold-body' + (open ? ' open' : '') + '" id="setBody-' + key + '">' + bodyHtml + '</div>' +
+      '</div>';
+  }
+
   async function settingsHtml() {
     const info = await DB.storageInfo();
     const pct = Math.min(100, Math.round(info.ratio * 100));
@@ -2987,9 +3118,12 @@
     }
     let hapticsOn = true;
     let weatherBg = true;
+    /* 抽屉开合状态：默认全收起，只露出标题行，页面短一大截 */
+    let folds = {};
     try {
       hapticsOn = (await DB.getSetting('haptics', true)) !== false;
       weatherBg = (await DB.getSetting('weatherBg', true)) !== false;
+      folds = (await DB.getSetting('settingsFolds', {})) || {};
     } catch (e) { /* 读不到按默认开 */ }
 
     const typeRows = [
@@ -3036,8 +3170,7 @@
       '</button>' +
       '</div>' +
 
-      '<div class="section-title"><span>外观与效果</span></div>' +
-      '<div class="setting-group">' +
+      setFoldSection('appearance', '外观与效果', '', '<div class="setting-group">' +
       '<button class="setting-item neu press" data-haptics-toggle type="button">' +
       '<span class="icon-box">' + UI.icon('spark') + '</span>' +
       '<span class="s-main"><span class="s-title">按键触感反馈</span>' +
@@ -3051,10 +3184,9 @@
       '每天联网查一次天气，只用于背景，不显示也不保存天气数据</span></span>' +
       '<span class="switch' + (weatherBg ? ' on' : '') + '"><i></i></span>' +
       '</button>' +
-      '</div>' +
+      '</div>', folds.appearance === true) +
 
-      '<div class="section-title"><span>系列模板</span><span class="count">' + state.series.length + ' 个</span></div>' +
-      '<div class="setting-group">' +
+      setFoldSection('series', '系列模板', state.series.length + ' 个', '<div class="setting-group">' +
       state.series.map(function (s) {
         const cycleInfo = s.cycle === 'week' ? ' · 每周一份' : (s.cycle === 'month' ? ' · 每月一份' : '');
         const offInfo = (s.cycle && s.included === false) ? ' · 不参与事件统计' : '';
@@ -3069,7 +3201,7 @@
       '<span class="s-main"><span class="s-title">新建系列模板</span><span class="s-desc">定义字段，统计表按字段生成</span></span>' +
       '<span class="chev">' + UI.icon('chev') + '</span>' +
       '</button>' +
-      '</div>' +
+      '</div>', folds.series === true) +
 
       '<div class="section-title"><span>备份与恢复</span></div>' +
       '<div class="setting-group">' +
@@ -3099,9 +3231,8 @@
       '</button>' +
       '</div>' +
 
-      '<div class="section-title"><span>图片文字识别</span><span class="count">' +
-      (ocr.total ? '已识别 ' + ocr.done + ' / ' + ocr.total + ' 张' : '暂无图片') + '</span></div>' +
-      '<div class="setting-group">' +
+      setFoldSection('ocr', '图片文字识别',
+      (ocr.total ? '已识别 ' + ocr.done + ' / ' + ocr.total + ' 张' : '暂无图片'), '<div class="setting-group">' +
       '<button class="setting-item neu press" data-ocr-toggle type="button">' +
       '<span class="icon-box">' + UI.icon('search') + '</span>' +
       '<span class="s-main"><span class="s-title">归档后自动识别图片文字</span>' +
@@ -3133,7 +3264,7 @@
       '第一次识别时加载（合计约 6~8MB，之后离线可用，建议在 WiFi 下做第一次）。' +
       '<strong>图片与识别结果都不会上传</strong>，也不经过任何服务器。</div>' +
       '<div class="notice info" style="margin-top:10px">印刷体、截图、表格里的文字识别效果较好；手写体、艺术字、模糊或倾斜的照片准确率有限，' +
-      '可以在查看器里对照原图核对识别结果。</div>' +
+      '可以在查看器里对照原图核对识别结果。</div>', folds.ocr === true) +
 
       '<div class="section-title"><span>数据安全</span></div>' +
       '<div class="notice">数据保存在这台设备的浏览器里，正常关闭、重开都不会丢。' +
@@ -3142,7 +3273,7 @@
       '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>' +
 
       '<div class="section-title"><span>关于</span></div>' +
-      '<div class="notice info">工作文件 · 本地档案版 v2.27 · 数据不上传，无账号，无云端。' +
+      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.30.0') + ' · 数据不上传，无账号，无云端。' +
       '<br>可添加到手机主屏幕，像应用一样全屏使用。</div>';
   }
 
@@ -3313,7 +3444,7 @@
 
     const html =
       '<div class="form">' +
-      '<div class="field"><label>已关联的关键词<span class="hint">显示在主页「内容关键词关联」最上方</span></label>' +
+      '<div class="field"><label>已关联的关键词<span class="hint">显示在「信息查询」页关键词关联表最上方</span></label>' +
       '<div id="kwPicked">' + chipsHtml() + '</div></div>' +
 
       '<div class="field"><label for="kwNew">手动添加</label>' +
@@ -4470,6 +4601,8 @@
     if (state.tab === 'schedule') {
       centerWeekStrip(section);
       mountSchedulePreview(section);
+    } else if (state.tab === 'search') {
+      bindPageSearch(section);
     }
   }
 
@@ -4542,12 +4675,33 @@
       const kwFoldBtn = e.target.closest('[data-sched-kw-fold]');
       if (kwFoldBtn) {
         const fold = kwFoldBtn.closest('.kw-fold');
+        const wrap = kwFoldBtn.closest('.sched-folds');
         if (fold) {
           const open = !fold.classList.contains('open');
           fold.classList.toggle('open', open);
+          if (wrap) wrap.classList.toggle('kw-open', open);
           kwFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
           state.schedule.kwOpen = open;
           try { await DB.setSetting('scheduleKwOpen', open); } catch (err) { /* 记不住就只影响下次进来 */ }
+        }
+        return;
+      }
+      /* 周次折叠：和关键词折叠并排，展开后铺满一行，顺手把选中周滚到中间 */
+      const wkFoldBtn = e.target.closest('[data-sched-week-fold]');
+      if (wkFoldBtn) {
+        const fold = wkFoldBtn.closest('.wk-fold');
+        const wrap = wkFoldBtn.closest('.sched-folds');
+        if (fold) {
+          const open = !fold.classList.contains('open');
+          fold.classList.toggle('open', open);
+          if (wrap) wrap.classList.toggle('wk-open', open);
+          wkFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+          state.schedule.weekOpen = open;
+          try { await DB.setSetting('scheduleWeekOpen', open); } catch (err) { /* 同上 */ }
+          if (open) {
+            const view = document.getElementById('view-schedule');
+            requestAnimationFrame(function () { if (view) centerWeekStrip(view); });
+          }
         }
         return;
       }
@@ -5052,6 +5206,24 @@
       }
 
       if (e.target.closest('[data-export-backup]')) { doExport(); return; }
+
+      /* 设置页抽屉：只切类名，不重绘，滚动位置不跳 */
+      const setFoldBtn = e.target.closest('[data-set-fold]');
+      if (setFoldBtn) {
+        const key = setFoldBtn.getAttribute('data-set-fold');
+        const body = document.getElementById('setBody-' + key);
+        const box = setFoldBtn.closest('.set-fold');
+        const open = setFoldBtn.getAttribute('aria-expanded') !== 'true';
+        setFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (body) body.classList.toggle('open', open);
+        if (box) box.classList.toggle('open', open);
+        try {
+          const map = (await DB.getSetting('settingsFolds', {})) || {};
+          map[key] = open;
+          await DB.setSetting('settingsFolds', map);
+        } catch (err) { /* 记不住就只影响下次进来 */ }
+        return;
+      }
 
       if (e.target.closest('[data-haptics-toggle]')) {
         const on = (await DB.getSetting('haptics', true)) === false;

@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 12:50 ｜ 当前版本：**v2.29.0** ｜ 缓存：`gongzuowenjian-v74`
+> 最后更新：2026-11-27 14:20 ｜ 当前版本：**v2.30.0** ｜ 缓存：`gongzuowenjian-v75`
 
 ---
 
@@ -52,9 +52,9 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.29.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.29.0`
-- SW 缓存 `gongzuowenjian-v74`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：commit `04448ac`，tag `v2.29.0`，已推 `origin/main`，Pages 已生效
+- 版本 `APP_VERSION = '2.30.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.30.0`
+- SW 缓存 `gongzuowenjian-v75`，清单已含 `./css/sky.css`、`./js/weather.js`
+- Git：tag `v2.30.0`（commit 见 `git log -1`），已推 `origin/main`，Pages 已生效
 - 工作区干净，无未提交改动
 
 ---
@@ -98,14 +98,28 @@ node server.js                      # 静态服务，端口 5173
 
 `--tile-w`：桌面 1600px，窄屏 900px（`@media` 覆盖）。
 
+**云层视差（v2.30）**：`--wx` / `--wy` 现在写在 `.sky` 根节点（`#sky`）上，子层继承。`.sky-clouds .c3/.c2/.c1` 用独立的 `translate` 属性反向偏 2 / 3 / 4px，漂移仍走 `transform`，两者不抢。
+
 > **⚠ 拷贝层必须补 `--tile-w`**：v2.29 加 `.sky-shadows` 时忘了给新容器定义 `--tile-w`，子元素宽度算出 0，整层完全不可见，排查了很久。
 
 ### 4.4 云影（v2.29）
 
 - `.sky-shadows` 与 `.sky-clouds` 同结构、同 `skyDrift` 动画 → 影子与云逐帧同速
 - 影子图是**单独的图**：`make-sky2.py` 的 `cloud_shadow_tile()` 只取云轮廓（圆 + 底椭圆），套 46 单位高斯模糊、填 `#2F4A66`，**模糊直接烘进 SVG**，不靠运行时 `filter`
-- 三层：错位 20 / 26 / 32px，opacity `.14 / .20 / .24`（远淡近实）
+- 三层按同一组变量缩放，远层薄而短、近层厚而长
 - 雨、雪两态 `.sky-shadows { opacity: 0 }`（1.2s 过渡，与云同步淡出）
+
+**光源与时段（v2.30）**：`.sky-shadows` 上四个变量——`--sh-dx` 横向比例、`--sh-dy` 纵向、`--sh-len` 影长、`--sh-k` 深浅。
+
+| 条件 | 效果 |
+| --- | --- |
+| 晴天 | `dx=1`、`dy=.78`、`k=1.16` → 统一压向右下，略深 |
+| 阴天 | `dx=.1`、`dy=1.1`、`len=.92`、`k=.82` → 几乎正下，更淡更短 |
+| `data-daypart` | 正午最短（`len=.74`）、早/晚拉长（1.22 / 1.3）、夜间更短更淡 |
+
+`data-daypart` 由 `app.js` 的 `markDaypart()` 写，按小时分 morning/midday/afternoon/evening/night，每 10 分钟校一次。
+
+> **⚠ 特异性**：阴天云规则 `:root[data-weather="cloudy"] .sky-cloud.c1` 比 `.sky-shadows .c1` 强，会压掉影子的透明度。已把阴天云规则限定到 `.sky-clouds` 内，影子规则补全成 `.sky-shadows .sky-cloud.c1`。新加天气规则记得别写成全局 `.sky-cloud.*`。
 
 ### 4.5 雨雪明暗流动（v2.28）
 
@@ -169,6 +183,15 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 ### v2.29.0 — 云影 + 视差
 见 4.4 / 4.6。
 
+### v2.30.0 — 云层视差 / 影子光源 / 界面收敛
+1. 云层跟随指针反向偏移 2~4px（远层几乎不动），`--wx` / `--wy` 改挂 `.sky`
+2. 影子有固定光源：晴偏右下、阴偏正下，按时段调影长
+3. 课表：周次改折叠胶囊，与关键词折叠并排；顶栏搜索框与文件/关键词/编辑三键移除，「选择文件」下移到「原文件放大」标题
+4. 课表：不能内嵌预览的原文件模块取消 260px 最小高度，只留一行说明
+5. 设置：系列模板 / 外观与效果 / 图片文字识别 改抽屉，状态存 `settingsFolds`
+6. 主页：「内容关键词关联」换「今日课表」（`coursesFor()` 与课表页共用），关键词关联表搬到「信息查询」页
+7. 搜索框只在主页；其余页右上角 `#appbarSearch` 图标 → 信息查询，该页自带 `#pageSearch`
+
 ---
 
 ## 6. 验证：审计脚本
@@ -178,7 +201,7 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 
 ```bash
 cd .workbuddy/pw
-node audit-v229.js
+node audit-v230.js
 ```
 
 跑前先 `node server.js` 起 5173 服务。
@@ -187,6 +210,7 @@ node audit-v229.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
+| `audit-v230.js` | 43 | 云层视差、影子光源、课表折叠并排、设置抽屉、首页当日课表、搜索入口 |
 | `audit-v229.js` | 16 | 云影、视差、低动效、手机端 |
 | `audit-v228.js` | 22 | 雨雪明暗流动、位移实测 |
 | `audit-v227.js` | 28 | 天气背景、抽屉、导航、触感 |
@@ -205,7 +229,7 @@ node audit-v229.js
 
 ### 已知的既有失败（与近期改动无关，别当回归）
 
-`audit-v17.js`（2 项）、`audit-v21.js`（3 项）、`audit-v25.js`（3 项）、`audit-display.js`（超时）
+`audit-v17.js`（2 项）、`audit-v21.js`（3 项）、`audit-v25.js`（3 项）、`audit-display.js`（超时）、`audit-searchview.js` F6a（正文基线 15px，断言写死 14px）
 
 ### 写审计脚本的注意点
 
@@ -230,10 +254,10 @@ node audit-v229.js
 
 ---
 
-## 8. 待做方向（上一轮给用户的两个建议，还没开工）
+## 8. 待做方向（下一轮候选，都没开工）
 
-1. **云的分层视差**：给云层也加 2~4px 反向偏移（远层几乎不动、近层跟手），天空有明显纵深。复用现成的 `--wx` / `--wy`，只需多三条 CSS 规则，零 JS 改动。
-2. **影子随“光源”倾斜**：晴天影子统一偏右下、阴天偏正下，并按时间（早/晚）微调偏移量。天空会显得有固定太阳方向，不加任何新资源。只改 `sky.css`（即改 `make-sky2.py`）。
+1. **云影随视差错位**：现在云在动、影子不动，大位移时会有 2~4px 的错位。可以把 `--wx` 也算进 `.sky-shadows` 的 `translate`，影子和云永远咬死。
+2. **折叠状态合并**：`kwOpen` / `weekOpen` 现在是两个独立 setting，可合并成 `scheduleFolds: {kw, week}`，与设置页的 `settingsFolds` 一个写法。
 
 ---
 

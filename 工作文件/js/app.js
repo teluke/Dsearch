@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.29.0';
+  window.APP_VERSION = '2.30.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -63,6 +63,13 @@
     $$('.nav-item').forEach(function (t) { t.classList.toggle('on', t.getAttribute('data-tab') === tab); });
     const title = $('#appTitle');
     if (title) title.textContent = TAB_TITLES[tab] || '工作文件';
+    /* 搜索栏只留在主页：其余页面收成右上角一个图标，点了直接进「信息查询」，
+       那一页有自己的输入框，不再靠顶栏常驻 */
+    const isHome = tab === 'home';
+    const gs = document.querySelector('.global-search');
+    const abSearch = $('#appbarSearch');
+    if (gs) gs.hidden = !isHome;
+    if (abSearch) abSearch.hidden = isHome || tab === 'search';
     const grp = document.getElementById('navGroupArchive');
     if (grp) grp.classList.toggle('open', tab === 'records' || tab === 'archive');
     closeNav();
@@ -384,11 +391,12 @@
     window.addEventListener('blur', hide);
   }
 
-  /* 雨雪视差：指针位置换算成 -1..1 写进 .sky-precip 的 --wx / --wy，
-     雨丝、雪花各按远近乘不同幅度横纵偏移。只写两个自定义属性，一次 rAF 一帧，
-     真正动的是合成器里的 translate，不重排。触屏上跟手拖动，抬手停住。 */
+  /* 雨雪 / 云层视差：指针位置换算成 -1..1 写进 .sky 的 --wx / --wy，
+     雨丝、雪花、三层云各按远近乘不同幅度偏移。写在天空根节点上，
+     子层直接继承，一次 rAF 一帧，真正动的只是合成器里的 translate。
+     云层取负号（与指针反向），近层 4px、远层 2px，天空就有纵深。 */
   function bindSkyParallax() {
-    const el = document.querySelector('.sky-precip');
+    const el = document.getElementById('sky');
     if (!el) return;
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     let raf = 0, tx = 0, ty = 0;
@@ -407,6 +415,23 @@
     window.addEventListener('pointermove', move, { passive: true });
     document.addEventListener('mouseleave', function () { tx = 0; ty = 0; put(); });
     window.addEventListener('blur', function () { tx = 0; ty = 0; put(); });
+  }
+
+  /* 时段标记：影子长度按太阳高度走（早长 → 正午短 → 傍晚再拉长），
+     只写一个 data-daypart，天空层用 CSS 变量接住，十分钟校一次。 */
+  function daypartOf(h) {
+    if (h >= 5 && h < 9) return 'morning';
+    if (h >= 9 && h < 14) return 'midday';
+    if (h >= 14 && h < 17) return 'afternoon';
+    if (h >= 17 && h < 20) return 'evening';
+    return 'night';
+  }
+
+  function markDaypart() {
+    const root = document.documentElement;
+    const put = function () { root.setAttribute('data-daypart', daypartOf(new Date().getHours())); };
+    put();
+    setInterval(put, 10 * 60 * 1000);
   }
 
   /* 按下水晶按键的触感：手机端给 8ms 轻振，桌面端浏览器没有 vibrate，自然为空 */
@@ -428,6 +453,7 @@
   async function boot() {
     bindSkyLight();
     bindSkyParallax();
+    markDaypart();
     bindHaptics();
     try {
       hapticsOn = (await DB.getSetting('haptics', true)) !== false;
@@ -498,6 +524,15 @@
     bindRemoteSync();
 
     bindGlobalSearch();
+    const abSearch = $('#appbarSearch');
+    if (abSearch) {
+      abSearch.addEventListener('click', function () {
+        switchTab('search', true).then(function () {
+          const input = document.querySelector('#view-search #pageSearch');
+          if (input) { try { input.focus({ preventScroll: true }); } catch (e) { /* 忽略 */ } }
+        });
+      });
+    }
     bindDrop();
     registerSW();
 

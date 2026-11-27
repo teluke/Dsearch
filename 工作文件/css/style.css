@@ -1143,6 +1143,11 @@ tr.hit-line > td { background: #FDF3D7; }
 }
 .global-search .search-shell { width: 100%; }
 
+/* 信息查询页自带的搜索框（v2.30：顶栏搜索栏只留在主页） */
+.page-search { max-width: 1180px; margin: 0 0 10px; }
+.page-search .search-shell { width: 100%; }
+.appbar-search { margin-left: auto; }
+
 /* 关键词命中高亮 */
 mark.kw-hit {
   background: linear-gradient(180deg, rgba(108, 139, 245, 0.06) 55%, rgba(242, 163, 107, 0.45) 55%);
@@ -2830,6 +2835,17 @@ html, body {
 }
 .sf-img, .sf-canvas { max-width: 100%; height: auto; display: block; border-radius: 8px; }
 .sf-empty { margin: auto; text-align: center; font-size: 12px; color: var(--text-3); }
+/* v2.30：不能内嵌预览的格式（xls/docx…）只剩一行说明，
+   模块高度按文字收，不再留一块 260px 的空画布 */
+.sf-stage.compact {
+  min-height: 0;
+  max-height: none;
+  padding: 14px 16px;
+  justify-content: flex-start;
+  background: transparent;
+}
+.sf-stage.compact .sf-empty { margin: 0; text-align: left; line-height: 1.7; }
+.sched-file.plain .sf-head { border-bottom: 1px solid var(--line); }
 .sched-docbar { display: flex; gap: 6px; overflow-x: auto; padding: 10px 0 0; }
 .sdoc {
   flex: none; max-width: 220px; padding: 6px 12px; border-radius: 999px;
@@ -3620,9 +3636,27 @@ select.input { background-color: rgba(255, 255, 255, .9); }
 /* 遮罩/蒙层上的按钮不参与反光，保持安静 */
 .overlay .btn, .modal-card .btn.ghost { box-shadow: none; }
 
-/* ---------- 课表：关键词行折叠 ---------- */
-.kw-fold { margin: 10px 0 2px; }
-.kw-fold-head {
+/* ---------- 课表：周次 / 关键词两个折叠面板并排 ----------
+   两个水晶胶囊并排一行，展开的那个在下面铺满一整行；
+   收起时只剩「第 N 周」「当前词」，课表主体可以往上提。 */
+.sched-folds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 2px;
+}
+.sched-folds .kw-fold,
+.sched-folds .wk-fold { flex: 0 0 auto; margin: 0; }
+.sched-folds .sched-kwline,
+.sched-folds .wk-strip { flex: 1 1 100%; display: none; }
+.sched-folds.kw-open .sched-kwline { display: flex; }
+.sched-folds.wk-open .wk-strip { display: flex; }
+.sched-folds .sched-kwline { margin: 2px 0 0; }
+.sched-folds .week-strip { margin: 4px 0 0; align-items: center; }
+
+.kw-fold-head,
+.wk-fold-head {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -3641,9 +3675,12 @@ select.input { background-color: rgba(255, 255, 255, .9); }
     0 3px 7px -3px rgba(96, 132, 190, .24);
   transition: box-shadow .13s ease, transform .13s ease;
 }
-.kw-fold-head:active { transform: translateY(1px); box-shadow: var(--xtal-down); }
-.kw-fold .kf-title { color: var(--text-3); letter-spacing: .4px; }
-.kw-fold .kf-cur {
+.kw-fold-head:active,
+.wk-fold-head:active { transform: translateY(1px); box-shadow: var(--xtal-down); }
+.kw-fold .kf-title,
+.wk-fold .kf-title { color: var(--text-3); letter-spacing: .4px; }
+.kw-fold .kf-cur,
+.wk-fold .kf-cur {
   max-width: 44vw;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3652,16 +3689,19 @@ select.input { background-color: rgba(255, 255, 255, .9); }
   font-weight: 500;
   color: var(--primary-2);
 }
-.kw-fold .kf-chev {
+.kw-fold .kf-chev,
+.wk-fold .kf-chev {
   display: inline-flex;
   transform: rotate(90deg);
   transition: transform .2s ease;
   opacity: .6;
 }
-.kw-fold .kf-chev svg { width: 12px; height: 12px; }
-.kw-fold.open .kf-chev { transform: rotate(-90deg); }
-.kw-fold .sched-kwline { display: none; }
-.kw-fold.open .sched-kwline { display: flex; }
+.kw-fold .kf-chev svg,
+.wk-fold .kf-chev svg { width: 12px; height: 12px; }
+.kw-fold.open .kf-chev,
+.wk-fold.open .kf-chev { transform: rotate(-90deg); }
+/* 旧结构（.kw-fold 内含 body）保留一份，避免历史页面样式断档 */
+.sched-folds .kw-fold .sched-kwline { display: none; }
 
 /* 「第 N 周 编辑」：文字换成一个很轻的小铅笔 */
 .sh-week { display: inline-flex; align-items: center; gap: 3px; }
@@ -3715,3 +3755,78 @@ select.input { background-color: rgba(255, 255, 255, .9); }
 @media (prefers-reduced-motion: reduce) {
   .memo-act:active, .memo-add-btn:active, .fchip:active, .kw-btn:active { transform: none; }
 }
+
+/* ==========================================================================
+   v2.30.0 首页当日课表 / 设置页抽屉 / 课表页折叠与瘦身
+   ========================================================================== */
+
+/* ---------- 设置页：可折叠抽屉 ---------- */
+.set-fold { margin-top: 22px; }
+.set-fold > .section-title { margin-bottom: 10px; }
+.set-fold-head {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.set-fold-head .title-side { gap: 9px; }
+.set-fold .sf-chev {
+  display: inline-flex;
+  align-items: center;
+  opacity: .48;
+  transform: rotate(90deg);
+  transition: transform .2s ease, opacity .2s ease;
+}
+.set-fold .sf-chev svg { width: 15px; height: 15px; }
+.set-fold.open .sf-chev { transform: rotate(-90deg); opacity: .82; }
+.set-fold-body { display: none; }
+.set-fold-body.open { display: block; animation: foldIn .2s ease both; }
+@keyframes foldIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------- 首页：今日课表 ---------- */
+.today-card { padding: 4px 16px 6px; }
+.today-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 0;
+  text-align: left;
+  border-bottom: 1px solid rgba(214, 224, 242, .55);
+}
+.today-row:last-child { border-bottom: 0; }
+.today-row .tc-period {
+  flex: none;
+  min-width: 62px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary-2);
+}
+.today-row .tc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.today-row .tc-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.today-row .tc-meta {
+  font-size: 11.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.today-empty { padding: 16px 2px 18px; }
+.today-empty .te-title { font-size: 13px; color: var(--text); }
+.today-empty .te-desc { margin-top: 4px; font-size: 11.5px; color: var(--text-2); line-height: 1.7; }
+
+/* 关键词关联表搬到信息查询页后，与结果区留出间距 */
+.kw-block { margin-top: 24px; }
