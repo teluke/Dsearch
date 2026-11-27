@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 20:58 ｜ 当前版本：**v2.36.0** ｜ 缓存：`gongzuowenjian-v81`
+> 最后更新：2026-11-27 21:05 ｜ 当前版本：**v2.36.0** ｜ 缓存：`gongzuowenjian-v81`
 
 ---
 
@@ -54,8 +54,8 @@ node server.js                      # 静态服务，端口 5173
 
 - 版本 `APP_VERSION = '2.36.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.36.0`
 - SW 缓存 `gongzuowenjian-v81`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.35.0`（commit `0463b62`）为上一版；v2.36.0 待提交
-- 当前改动：天空独立合成层、去白色光晕与顶栏模糊、浮动迁到 `.sky-float`
+- Git：tag `v2.36.0`（commit `c788d4a`），已推 `origin/main`，Pages 已生效
+- 工作区干净，无未提交改动
 
 ---
 
