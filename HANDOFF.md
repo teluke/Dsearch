@@ -54,7 +54,7 @@ node server.js                      # 静态服务，端口 5173
 
 - 版本 `APP_VERSION = '2.38.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.38.0`
 - SW 缓存 `gongzuowenjian-v83`，清单已含 `./css/sky.css`、`./js/weather.js`；`assets/sky/clouds-m.webp` 不预缓存，走运行时缓存（桌面端永不下载）
-- Git：tag `v2.37.0`（commit `140e127`），已推 `origin/main`，Pages 已生效
+- Git：tag `v2.38.0`（commit `215266f`），已推 `origin/main`，Pages 已生效（线上验收 20/0）
 - 工作区干净，无未提交改动
 
 ---
