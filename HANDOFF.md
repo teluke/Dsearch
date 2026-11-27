@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 17:25 ｜ 当前版本：**v2.32.0** ｜ 缓存：`gongzuowenjian-v77`
+> 最后更新：2026-11-27 17:55 ｜ 当前版本：**v2.33.0** ｜ 缓存：`gongzuowenjian-v78`
 
 ---
 
@@ -52,10 +52,10 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.32.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.32.0`
-- SW 缓存 `gongzuowenjian-v77`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.32.0`（commit `64c8147`），已推 `origin/main`，Pages 已生效
-- 工作区干净，无未提交改动
+- 版本 `APP_VERSION = '2.33.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.33.0`
+- SW 缓存 `gongzuowenjian-v78`，清单已含 `./css/sky.css`、`./js/weather.js`
+- Git：tag `v2.32.0`（commit `64c8147`）为上一版；v2.33.0 待提交
+- 当前改动：天空等比铺图 + 手机端落位修正 + 桌面淡化 + 上下浮动
 
 ---
 
@@ -88,7 +88,7 @@ node server.js                      # 静态服务，端口 5173
 
 ### 4.3 云层怎么动
 
-三层 `.sky-cloud`，`width: calc(100% + var(--tile-w))`，`background-size: var(--tile-w) 100%` 平铺，动画 `skyDrift` 从 `translate3d(0,0,0)` 到 `translate3d(calc(var(--tile-w) * -1),0,0)`，位移正好一个平铺宽度 → 无缝循环。
+三层 `.sky-cloud`，`width: calc(100% + var(--tile-w))`，`background-size: var(--tile-w) var(--tile-h)` 等比平铺，动画 `skyDrift` 从 `translate3d(0,0,0)` 到 `translate3d(calc(var(--tile-w) * -1),0,0)`，位移正好一个平铺宽度 → 无缝循环。
 
 | 层 | 时长 | 说明 |
 | --- | --- | --- |
@@ -96,23 +96,28 @@ node server.js                      # 静态服务，端口 5173
 | `.c2`（中） | 400s | |
 | `.c1`（近） | 285s | 最快 |
 
-`--tile-w`：桌面 1600px，窄屏 900px（`@media` 覆盖）。
+`--tile-w / --tile-h`：桌面 `1600px / 900px`，窄屏 `760px / 427.5px`（`@media` 覆盖）。**高度必须按瓦片比例算**，用容器百分比会把小狗纵向压扁（v2.33 修掉）。
+
+三层落位 `--cloud-top`：桌面 `-300 / -130 / 75px`，窄屏 `10 / 50 / 108px`（远→近），按瓦片内云体 y 偏移 560/330/60 反推，保证手机端云体最上方低于顶栏下缘。
 
 **云层视差（v2.30）**：`--wx` / `--wy` 现在写在 `.sky` 根节点（`#sky`）上，子层继承。`.sky-clouds .c3/.c2/.c1` 用独立的 `translate` 属性反向偏 2 / 3 / 4px，漂移仍走 `transform`，两者不抢。
 
 **云影同步（v2.31）**：`.sky-shadows .c3/.c2/.c1` 的 `translate` 在光源偏移后再加同一份 `--wx/--wy` 视差，过渡统一 `.16s`。
 
-**小狗云（v2.32）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。改云只改这个脚本再重跑，不要手改 `sky.css`。
+**上下浮动（v2.33）**：`@property` 注册 `--float-c1/c2/c3`，在 `.sky` 上用 24/31/38s alternate 动画缓慢改值（±5/±4/±3px）。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；浮动不占用 `transform`，`skyDrift` 不受影响。`prefers-reduced-motion` 下 `.sky` 动画整体关闭。
+
+**小狗云（v2.32 / v2.33）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。v2.33 起按瓦片原比例铺图并下移落位，桌面透明度再压一档。改云只改脚本再重跑，不要手改 `sky.css`。
 
 > **⚠ 影层矩形**：高斯模糊前必须垫 110px 透明边，影层缩放必须用双线性 + alpha 截断；否则模糊/缩放会把 alpha 渗到整块矩形，叠在天空上就是淡蓝方块。
 > **⚠ 原图隐私**：`puppy-clouds.jpg` 只在本地 `.workbuddy/tmp/source/`，不要 `git add`。
 
-> **⚠ 拷贝层必须补 `--tile-w`**：v2.29 加 `.sky-shadows` 时忘了给新容器定义 `--tile-w`，子元素宽度算出 0，整层完全不可见，排查了很久。
+> **⚠ 拷贝层必须补 `--tile-w` / `--tile-h`**：v2.29 加 `.sky-shadows` 时忘了给新容器定义 `--tile-w`，子元素宽度算出 0，整层完全不可见；v2.33 同理，缺 `--tile-h` 会让 `background-size` 的第二个值失效。
+> **⚠ 别用容器百分比当云层高度**：会把 1600×900 的瓦片拉变形，小狗被压扁。改高度必须同步改 `--tile-h`。
 
 ### 4.4 云影（v2.29）
 
 - `.sky-shadows` 与 `.sky-clouds` 同结构、同 `skyDrift` 动画 → 影子与云逐帧同速
-- 影子图是**单独的图**：`make-sky2.py` 的 `cloud_shadow_tile()` 只取云轮廓（圆 + 底椭圆），套 46 单位高斯模糊、填 `#2F4A66`，**模糊直接烘进 SVG**，不靠运行时 `filter`
+- 影子图是**单独的图**：`puppy_cloud_assets.py` 的 `shadow()` 取云轮廓，垫 110px 透明边后高斯模糊、双线性缩放、截断低 alpha，烘成 WebP；不靠运行时 `filter`
 - 三层按同一组变量缩放，远层薄而短、近层厚而长
 - 雨、雪两态 `.sky-shadows { opacity: 0 }`（1.2s 过渡，与云同步淡出）
 
@@ -190,6 +195,12 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 ### v2.29.0 — 云影 + 视差
 见 4.4 / 4.6。
 
+### v2.33.0 — 云不变形 / 手机端避开顶栏 / 淡化 + 浮动
+1. 云层高度改固定瓦片高（桌面 900px、窄屏 427.5px），`background-size` 按 `--tile-w / --tile-h` 等比铺，解决手机端小狗被压扁
+2. 三层加 `--cloud-top` 落位，按瓦片内云体 y 偏移反推；手机端三层云体最上方都在顶栏下缘以下
+3. 桌面晴天/阴天云透明度整体降一档，仍比手机端实、近实远淡
+4. 注册 `--float-c1/c2/c3`，三层云各按 24/31/38s 缓慢上下浮动 ±5/±4/±3px；云与影共用同一位移，低动效关闭
+
 ### v2.32.0 — 三只小狗云 / 无缝轨迹 / 光影去色块
 1. 三朵「云+小狗」本地抠图，保留完整云形与五官，替换手绘云；原图不入库
 2. 三款云分近/中/远层，匀速左移 285/400/540s，图内两份、边缘透明，循环无半截云
@@ -222,7 +233,7 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 
 ```bash
 cd .workbuddy/pw
-node audit-v232.js
+node audit-v233.js
 ```
 
 跑前先 `node server.js` 起 5173 服务。
@@ -231,7 +242,8 @@ node audit-v232.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
-| `audit-v232.js` | 22 | 小狗云完整性、无缝轨迹、影层无方块、灰阶与手机收敛 |\n| `audit-v231.js` | 24 | 云影视差同步、三款新云、折叠对象、字号分级、iOS 式切换 |
+| `audit-v233.js` | 24 | 等比铺图、手机端避开顶栏、桌面淡化、上下浮动与云影同步 |
+| `audit-v232.js` | 22 | 小狗云完整性、无缝轨迹、影层无方块、灰阶与手机收敛（v233 起影层断言扣浮动量） |\n| `audit-v231.js` | 24 | 云影视差同步、三款新云、折叠对象、字号分级、iOS 式切换 |
 | `audit-v230.js` | 43 | 云层视差、影子光源、课表折叠并排、设置抽屉、首页当日课表、搜索入口 |
 | `audit-v229.js` | 16 | 云影、视差、低动效、手机端 |
 | `audit-v228.js` | 22 | 雨雪明暗流动、位移实测 |

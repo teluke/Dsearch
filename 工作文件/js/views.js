@@ -3276,7 +3276,7 @@
       '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>' +
 
       '<div class="section-title"><span>关于</span></div>' +
-      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.32.0') + ' · 数据不上传，无账号，无云端。' +
+      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.33.0') + ' · 数据不上传，无账号，无云端。' +
       '<br>可添加到手机主屏幕，像应用一样全屏使用。</div>';
   }
 
