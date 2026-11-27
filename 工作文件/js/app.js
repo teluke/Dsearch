@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.33.0';
+  window.APP_VERSION = '2.34.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -77,11 +77,10 @@
     const oldTab = oldView ? oldView.getAttribute('data-tab') : null;
     const target = document.querySelector('.view[data-tab="' + tab + '"]');
     const changed = !!oldView && oldTab !== tab;
-    if (changed) {
-      oldView.classList.remove('active');
-      target.classList.add('view-waiting');
-    }
-    $$('.view').forEach(function (v) { v.classList.toggle('active', v.getAttribute('data-tab') === tab); });
+    /* v2.34：渲染期间旧页继续显示，目标页移到文档流外隐藏渲染。
+       旧版先把旧页撤掉再等新页渲染，中间两页都不在画面里，只剩亮天空，
+       看起来就是切页时背景爆闪。 */
+    if (changed && target) target.classList.add('view-waiting');
     $$('.nav-item').forEach(function (t) { t.classList.toggle('on', t.getAttribute('data-tab') === tab); });
     const title = $('#appTitle');
     if (title) title.textContent = TAB_TITLES[tab] || '工作文件';
@@ -99,7 +98,6 @@
       const targetHash = '#/' + tab;
       if (location.hash !== targetHash) history.replaceState(null, '', targetHash);
     }
-    window.scrollTo(0, 0);
     closeFab();
     if (tab === 'events') setEventsBadge(0);
     try {
@@ -107,6 +105,10 @@
     } finally {
       if (target) target.classList.remove('view-waiting');
     }
+    /* 新内容就绪后才换页，滚动位置也在这里归零，用户看不到中间的空白帧 */
+    if (changed && oldView) oldView.classList.remove('active');
+    if (target) target.classList.add('active');
+    window.scrollTo(0, 0);
     if (changed) playViewPush(target, TABS.indexOf(tab) >= TABS.indexOf(oldTab));
   }
 

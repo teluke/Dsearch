@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 17:55 ｜ 当前版本：**v2.33.0** ｜ 缓存：`gongzuowenjian-v78`
+> 最后更新：2026-11-27 18:42 ｜ 当前版本：**v2.34.0** ｜ 缓存：`gongzuowenjian-v79`
 
 ---
 
@@ -52,10 +52,10 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.33.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.33.0`
-- SW 缓存 `gongzuowenjian-v78`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.33.0`（commit `f769c7d`），已推 `origin/main`，Pages 已生效
-- 工作区干净，无未提交改动
+- 版本 `APP_VERSION = '2.34.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.34.0`
+- SW 缓存 `gongzuowenjian-v79`，清单已含 `./css/sky.css`、`./js/weather.js`
+- Git：tag `v2.33.0`（commit `f769c7d`）为上一版；v2.34.0 待提交
+- 工作区：v2.34 改动待提交
 
 ---
 
@@ -104,7 +104,7 @@ node server.js                      # 静态服务，端口 5173
 
 **云影同步（v2.31）**：`.sky-shadows .c3/.c2/.c1` 的 `translate` 在光源偏移后再加同一份 `--wx/--wy` 视差，过渡统一 `.16s`。
 
-**上下浮动（v2.33）**：`@property` 注册 `--float-c1/c2/c3`，在 `.sky` 上用 24/31/38s alternate 动画缓慢改值（±5/±4/±3px）。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；浮动不占用 `transform`，`skyDrift` 不受影响。`prefers-reduced-motion` 下 `.sky` 动画整体关闭。
+**上下浮动（v2.33 / v2.34）**：`@property` 注册 `--float-c1/c2/c3`，在 `.sky` 上用 48/62/76s linear 循环改值（±5/±4/±3px，往返匀速、两端不停顿）。v2.33 原为 `ease-in-out + alternate`，v2.34 改成单周期 `-N → +N → -N`。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；浮动不占用 `transform`，`skyDrift` 不受影响。`prefers-reduced-motion` 下 `.sky` 动画整体关闭。
 
 **小狗云（v2.32 / v2.33）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。v2.33 起按瓦片原比例铺图并下移落位，桌面透明度再压一档。改云只改脚本再重跑，不要手改 `sky.css`。
 
@@ -195,6 +195,11 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 ### v2.29.0 — 云影 + 视差
 见 4.4 / 4.6。
 
+### v2.34.0 — 切页无空白 / 云匀速 / 设置页七抽屉
+1. `switchTab()` 改为旧页留到新页渲染完成再撤；目标页 `.view-waiting` 脱离文档流、保留布局宽度，修掉切页时只剩亮天空的爆闪
+2. 云浮动改全程 `linear` 往返（48/62/76s），去掉缓动停顿；云影仍同步、低动效仍关闭
+3. 设置页文档管理 / 备份与恢复 / 局域网同步 / 数据安全四栏改抽屉，状态存 `settingsFolds`，全页共七块抽屉
+
 ### v2.33.0 — 云不变形 / 手机端避开顶栏 / 淡化 + 浮动
 1. 云层高度改固定瓦片高（桌面 900px、窄屏 427.5px），`background-size` 按 `--tile-w / --tile-h` 等比铺，解决手机端小狗被压扁
 2. 三层加 `--cloud-top` 落位，按瓦片内云体 y 偏移反推；手机端三层云体最上方都在顶栏下缘以下
@@ -233,7 +238,7 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 
 ```bash
 cd .workbuddy/pw
-node audit-v233.js
+node audit-v234.js
 ```
 
 跑前先 `node server.js` 起 5173 服务。
@@ -242,7 +247,8 @@ node audit-v233.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
-| `audit-v233.js` | 24 | 等比铺图、手机端避开顶栏、桌面淡化、上下浮动与云影同步 |
+| `audit-v234.js` | 16 | 切页渲染中旧页可见、目标页离屏有宽度、匀速浮动、七块抽屉与状态记忆 |
+| `audit-v233.js` | 25 | 等比铺图、手机端避开顶栏、桌面淡化、上下浮动与云影同步 |
 | `audit-v232.js` | 22 | 小狗云完整性、无缝轨迹、影层无方块、灰阶与手机收敛（v233 起影层断言扣浮动量） |\n| `audit-v231.js` | 24 | 云影视差同步、三款新云、折叠对象、字号分级、iOS 式切换 |
 | `audit-v230.js` | 43 | 云层视差、影子光源、课表折叠并排、设置抽屉、首页当日课表、搜索入口 |
 | `audit-v229.js` | 16 | 云影、视差、低动效、手机端 |
@@ -285,6 +291,7 @@ node audit-v233.js
 6. **选中态写在主色规则之前会被覆盖**，拆成「默认凸起」与「已选中内凹」两套。
 7. **Python 生成器里 `%` 要转义**：SVG 里的 `x="-60%"` 在 `%` 格式化字符串里必须写 `%%`。
 8. **`make-sky2.py` 的 `%s` 占位符别拼在 `%` 之后**，否则四个天气全回落到晴天。
+9. **切页渲染期间别撤掉旧页**：v2.34 前 `switchTab()` 先给旧页去 `active`、再等 `Views.go()` 异步渲染，中间两页都不显示，只剩亮天空 → 用户看到「爆闪」。现在旧页保持可见，目标页加 `.view-waiting`（`position:absolute` 离屏、保留宽度供预览读 `clientWidth`），渲染完才换页；改这段时别把 `view-waiting` 改回 `display:none`。
 
 ---
 

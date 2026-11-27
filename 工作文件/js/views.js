@@ -3153,8 +3153,7 @@
       (warn ? '<div class="inline-hint warn" style="margin-top:10px">容量接近上限，建议导出备份后清理较早的文件</div>' : '') +
       '</div>' +
 
-      '<div class="section-title"><span>文档管理</span><span class="count">' + info.count + ' 份</span></div>' +
-      '<div class="setting-group">' +
+      setFoldSection('docs', '文档管理', info.count + ' 份', '<div class="setting-group">' +
       '<button class="setting-item neu press" data-bulk-manage type="button">' +
       '<span class="icon-box">' + UI.icon('trash') + '</span>' +
       '<span class="s-main"><span class="s-title">批量管理</span><span class="s-desc">勾选后删除，支持全选</span></span>' +
@@ -3171,7 +3170,7 @@
       '<span class="s-main"><span class="s-title">清空全部数据</span><span class="s-desc">删除所有文件与记录，操作不可撤销</span></span>' +
       '<span class="chev">' + UI.icon('chev') + '</span>' +
       '</button>' +
-      '</div>' +
+      '</div>', folds.docs === true) +
 
       setFoldSection('appearance', '外观与效果', '', '<div class="setting-group">' +
       '<button class="setting-item neu press" data-haptics-toggle type="button">' +
@@ -3206,8 +3205,7 @@
       '</button>' +
       '</div>', folds.series === true) +
 
-      '<div class="section-title"><span>备份与恢复</span></div>' +
-      '<div class="setting-group">' +
+      setFoldSection('backup', '备份与恢复', '', '<div class="setting-group">' +
       '<button class="setting-item neu press" data-export-backup type="button">' +
       '<span class="icon-box">' + UI.icon('download') + '</span>' +
       '<span class="s-main"><span class="s-title">导出备份</span><span class="s-desc">记录与文件本体打包成一个 zip</span></span>' +
@@ -3218,10 +3216,9 @@
       '<span class="s-main"><span class="s-title">恢复备份</span><span class="s-desc">选择 zip 文件导入，可合并或覆盖</span></span>' +
       '<span class="chev">' + UI.icon('chev') + '</span>' +
       '</button>' +
-      '</div>' +
+      '</div>', folds.backup === true) +
 
-      '<div class="section-title"><span>局域网同步</span></div>' +
-      '<div class="setting-group">' +
+      setFoldSection('sync', '局域网同步', '', '<div class="setting-group">' +
       '<button class="setting-item neu press" data-sync-open type="button">' +
       '<span class="icon-box">' + UI.icon('database') + '</span>' +
       '<span class="s-main"><span class="s-title">与另一台设备直连</span><span class="s-desc">同一 WiFi 下扫码配对，电脑资料与待办实时同步到手机，不经过服务器；手机端也可从左上角菜单「扫码连接电脑」直接进入</span></span>' +
@@ -3232,7 +3229,7 @@
       '<span class="s-main"><span class="s-title">从手机导入文件</span><span class="s-desc">选取本机文件归档，或导入电脑导出的备份 zip</span></span>' +
       '<span class="chev">' + UI.icon('chev') + '</span>' +
       '</button>' +
-      '</div>' +
+      '</div>', folds.sync === true) +
 
       setFoldSection('ocr', '图片文字识别',
       (ocr.total ? '已识别 ' + ocr.done + ' / ' + ocr.total + ' 张' : '暂无图片'), '<div class="setting-group">' +
@@ -3269,14 +3266,14 @@
       '<div class="notice info" style="margin-top:10px">印刷体、截图、表格里的文字识别效果较好；手写体、艺术字、模糊或倾斜的照片准确率有限，' +
       '可以在查看器里对照原图核对识别结果。</div>', folds.ocr === true) +
 
-      '<div class="section-title"><span>数据安全</span></div>' +
+      setFoldSection('security', '数据安全', '',
       '<div class="notice">数据保存在这台设备的浏览器里，正常关闭、重开都不会丢。' +
       '<strong>清除浏览器数据、卸载浏览器、无痕模式、更换设备会导致数据丢失</strong>，备份文件是唯一兜底，建议定期导出。</div>' +
       '<div class="notice info" style="margin-top:10px">图片中的文字由本机识别后存进这条记录，保存在本机数据库里；' +
-      '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>' +
+      '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>', folds.security === true) +
 
       '<div class="section-title"><span>关于</span></div>' +
-      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.33.0') + ' · 数据不上传，无账号，无云端。' +
+      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.34.0') + ' · 数据不上传，无账号，无云端。' +
       '<br>可添加到手机主屏幕，像应用一样全屏使用。</div>';
   }
 

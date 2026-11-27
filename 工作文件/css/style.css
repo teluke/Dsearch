@@ -1087,7 +1087,7 @@ tr.hit-line > td { background: #FDF3D7; }
 
 /* 电脑端：双栏 */
 @media (min-width: 900px) {
-  .view.active { max-width: 860px; margin: 0 auto; }
+  :is(.view.active, .view.view-waiting) { max-width: 860px; margin: 0 auto; }
   .fab-wrap { right: calc((100vw - 900px) / 2 + 16px); }
   .nav-panel { width: var(--nav-w); }
   .nav-drawer { --nav-w: 340px; }
@@ -1117,7 +1117,7 @@ tr.hit-line > td { background: #FDF3D7; }
 }
 
 @media (min-width: 1100px) {
-  .view.active { max-width: 860px; }
+  :is(.view.active, .view.view-waiting) { max-width: 860px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3907,4 +3907,16 @@ html, body { background-attachment: scroll !important; }
   -webkit-backdrop-filter: blur(10px) saturate(1.05);
   backdrop-filter: blur(10px) saturate(1.05);
 }
-.view.view-waiting { visibility: hidden; }
+/* v2.34：渲染中的目标页脱离文档流但保留布局宽度（预览缩放要读 clientWidth），
+   旧页仍在画面上，避免两页皆空只剩亮天空的爆闪。 */
+.view.view-waiting {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: auto;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}

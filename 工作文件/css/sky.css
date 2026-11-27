@@ -25,14 +25,15 @@
 @property --float-c1 { syntax: '<length>'; inherits: true; initial-value: 0px; }
 @property --float-c2 { syntax: '<length>'; inherits: true; initial-value: 0px; }
 @property --float-c3 { syntax: '<length>'; inherits: true; initial-value: 0px; }
-@keyframes floatCloudA { from { --float-c1: -5px; } to { --float-c1: 5px; } }
-@keyframes floatCloudB { from { --float-c2: -4px; } to { --float-c2: 4px; } }
-@keyframes floatCloudC { from { --float-c3: -3px; } to { --float-c3: 3px; } }
+/* 匀速往返：一个周期内 -N → +N → -N，linear 全程不变速，不会在两端停顿 */
+@keyframes floatCloudA { 0%, 100% { --float-c1: -5px; } 50% { --float-c1: 5px; } }
+@keyframes floatCloudB { 0%, 100% { --float-c2: -4px; } 50% { --float-c2: 4px; } }
+@keyframes floatCloudC { 0%, 100% { --float-c3: -3px; } 50% { --float-c3: 3px; } }
 .sky {
   animation:
-    floatCloudA 24s ease-in-out -3s infinite alternate,
-    floatCloudB 31s ease-in-out -11s infinite alternate,
-    floatCloudC 38s ease-in-out -19s infinite alternate;
+    floatCloudA 48s linear -3s infinite,
+    floatCloudB 62s linear -11s infinite,
+    floatCloudC 76s linear -19s infinite;
 }
 
 html { background-color: var(--sky-base); transition: background-color .6s ease; }
