@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 19:38 ｜ 当前版本：**v2.35.0** ｜ 缓存：`gongzuowenjian-v80`
+> 最后更新：2026-11-27 20:58 ｜ 当前版本：**v2.36.0** ｜ 缓存：`gongzuowenjian-v81`
 
 ---
 
@@ -52,10 +52,10 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.35.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.35.0`
-- SW 缓存 `gongzuowenjian-v80`，清单已含 `./css/sky.css`、`./js/weather.js`
-- Git：tag `v2.35.0`（commit `0463b62`），已推 `origin/main`，Pages 已生效
-- 工作区干净，无未提交改动
+- 版本 `APP_VERSION = '2.36.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.36.0`
+- SW 缓存 `gongzuowenjian-v81`，清单已含 `./css/sky.css`、`./js/weather.js`
+- Git：tag `v2.35.0`（commit `0463b62`）为上一版；v2.36.0 待提交
+- 当前改动：天空独立合成层、去白色光晕与顶栏模糊、浮动迁到 `.sky-float`
 
 ---
 
@@ -65,18 +65,20 @@ node server.js                      # 静态服务，端口 5173
 
 ```html
 <div class="sky" id="sky" aria-hidden="true">
-  <div class="sky-shadows">    <!-- v2.29 云影，3 层 -->
-    <div class="sky-cloud c3"></div><div class="sky-cloud c2"></div><div class="sky-cloud c1"></div>
-  </div>
-  <div class="sky-clouds">     <!-- 云，3 层 -->
-    <div class="sky-cloud c3"></div><div class="sky-cloud c2"></div><div class="sky-cloud c1"></div>
+  <div class="sky-float">      <!-- v2.36 浮动容器，三条动画挂这里 -->
+    <div class="sky-shadows">  <!-- v2.29 云影，3 层 -->
+      <div class="sky-cloud c3"></div><div class="sky-cloud c2"></div><div class="sky-cloud c1"></div>
+    </div>
+    <div class="sky-clouds">   <!-- 云，3 层 -->
+      <div class="sky-cloud c3"></div><div class="sky-cloud c2"></div><div class="sky-cloud c1"></div>
+    </div>
   </div>
   <div class="sky-precip"><i></i><i></i><i></i></div>  <!-- 雨丝 / 雪花，3 层 -->
   <div class="sky-light" id="skyLight"></div>          <!-- 光照层 -->
 </div>
 ```
 
-`.sky` 是 `position:fixed; inset:0; z-index:-1; pointer-events:none`。所有天空样式都在 `sky.css`。
+`.sky` 是 `position:fixed; inset:0; z-index:0; pointer-events:none`，独立合成层（translateZ(0) + will-change + isolation + contain）；`.app` 的 z-index 是 1，压在天空之上。所有天空样式都在 `sky.css`。
 
 ### 4.2 四态切换
 
@@ -104,7 +106,7 @@ node server.js                      # 静态服务，端口 5173
 
 **云影同步（v2.31）**：`.sky-shadows .c3/.c2/.c1` 的 `translate` 在光源偏移后再加同一份 `--wx/--wy` 视差，过渡统一 `.16s`。
 
-**上下浮动（v2.33 / v2.34）**：`@property` 注册 `--float-c1/c2/c3`，在 `.sky` 上用 48/62/76s linear 循环改值（±5/±4/±3px，往返匀速、两端不停顿）。v2.33 原为 `ease-in-out + alternate`，v2.34 改成单周期 `-N → +N → -N`。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；浮动不占用 `transform`，`skyDrift` 不受影响。`prefers-reduced-motion` 下 `.sky` 动画整体关闭。
+**上下浮动（v2.33 / v2.34 / v2.36）**：`@property` 注册 `--float-c1/c2/c3`，48/62/76s linear 循环改值（±5/±4/±3px，单周期 `-N → +N → -N`，两端不停顿）。v2.36 起动画挂在新增的 `.sky-float` 容器（包住云与影），**不再挂在 `.sky`**——背景底图本身 `animation: none`，滚动时不会因整棵背景子树每帧重算样式而闪一下。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；低动效下 `.sky-float` 动画整体关闭。
 
 **小狗云（v2.32 / v2.33）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。v2.33 起按瓦片原比例铺图并下移落位，桌面透明度再压一档。改云只改脚本再重跑，不要手改 `sky.css`。
 
@@ -195,6 +197,13 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 ### v2.29.0 — 云影 + 视差
 见 4.4 / 4.6。
 
+### v2.36.0 — 滑动闪背景：天空独立合成 / 去白色光晕
+1. `.sky` 改 `z-index:0` + `translateZ(0)` + `will-change:transform` + `isolation:isolate` + `contain:layout paint`；`.app` 抬到 `z-index:1`
+2. 删掉 `html, body` 三道白色径向渐变和 `.app::before` 的 30px 模糊白光晕（含 `glazeDrift` 动画）；天空色只靠 `sky.css` 的 `html background-color` 兜底
+3. `.appbar` 关掉所有 `backdrop-filter`，改半透明底色；滚动不再重采样天空
+4. 浮动动画从 `.sky` 迁到 `.sky-float`（包住云与影），背景底图零动画；顺带修影层窄屏被写死 1600px 的问题
+5. `audit-v236.js` 15 项全过；CDP 逐帧录屏确认连续滑动时背景亮度跨度 0.5、单帧最大 0.02；全量回归零失败
+
 ### v2.35.0 — 爆闪逻辑根治 / 导航串行化
 1. `playViewPush()` 关键帧删掉 `opacity`，只保留 `transform: translate3d(±20px)→0`；`.view-slide` 的 `will-change` 同步去掉 opacity。整页从第一帧起不透明，亮天空不再透上来
 2. `switchTab()` 拆成入队包装 + `switchTabNow()`：上一个 `Views.go()` 没完成时后续点击排队，旧任务不会抢回页面；导航点击/hashchange 改看真实 active 页与队尾目标，不再信 `Views.state.tab`
@@ -244,7 +253,7 @@ CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`）�
 
 ```bash
 cd .workbuddy/pw
-node audit-v235.js
+node audit-v236.js
 ```
 
 跑前先 `node server.js` 起 5173 服务。
@@ -253,6 +262,7 @@ node audit-v235.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
+| `audit-v236.js` | 15 | 天空独立合成层、无白色光晕与顶栏模糊、浮动迁到 .sky-float、滑动无报错 |
 | `audit-v235.js` | 15 | 整页动画无 opacity、逐帧 opacity=1、连点串行化、异步等待期旧页仍在、低动效 |
 | `audit-v234.js` | 16 | 切页渲染中旧页可见、目标页离屏有宽度、匀速浮动、七块抽屉与状态记忆 |
 | `audit-v233.js` | 25 | 等比铺图、手机端避开顶栏、桌面淡化、上下浮动与云影同步 |
@@ -299,6 +309,7 @@ node audit-v235.js
 7. **Python 生成器里 `%` 要转义**：SVG 里的 `x="-60%"` 在 `%` 格式化字符串里必须写 `%%`。
 8. **`make-sky2.py` 的 `%s` 占位符别拼在 `%` 之后**，否则四个天气全回落到晴天。
 9. **切页两个坑，别只修一个**：① v2.34 前渲染等待期两页皆空，只剩亮天空；现在旧页保持可见，目标页 `.view-waiting`（`position:absolute` 离屏、保留宽度读 `clientWidth`），渲染完才换页，别把 `view-waiting` 改回 `display:none`。② v2.35 发现 `playViewPush()` 的整页 `opacity .45→1` 才是残留爆闪——页面透明，淡入时亮天空透上来；关键帧只留 `transform`，`will-change` 也别写 opacity。`switchTab()` 必须串行入队，连点时旧任务不能抢回 active；判断当前页看真实 `.view.active`，别信 `Views.state.tab`（它在 `go()` 开头就改了）。
+10. **滑动闪背景查「亮底竞争」**：v2.36 前 `html` 有三道白色径向渐变、`.app::before` 有 30px 模糊白光晕、`.appbar` 有 `backdrop-filter`，天空又是 `z-index:-1` 的普通固定层；滚动时先画亮底再补合成层就会闪。现在天空独立合成层 `z-index:0`、`.app` 为 1，亮底和模糊全删，浮动动画只挂 `.sky-float`。**别再把渐变/模糊加回去，也别把云浮动动画挂回 `.sky`。**
 
 ---
 
