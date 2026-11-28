@@ -3165,7 +3165,7 @@
     const autoPlace = document.documentElement.getAttribute('data-weather-place') || '';
     const cityDesc = weatherCity
       ? '当前：' + weatherCity.name + ' · 点击修改'
-      : (autoPlace ? '自动定位：' + autoPlace + ' · 点击手动指定' : '自动按网络定位 · 点击手动指定');
+      : (autoPlace ? '自动定位：' + autoPlace + '（估计值）· 点击手动指定' : '自动按网络定位 · 点击手动指定');
 
     const typeRows = [
       ['文档', info.byType.doc, '#6C8BF5'],
