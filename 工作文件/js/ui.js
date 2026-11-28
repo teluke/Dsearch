@@ -180,6 +180,34 @@
     });
   }
 
+  /* 输入框弹窗（v2.39）：确认框的变体，确定返回输入内容、取消返回 null */
+  let modalMode = 'confirm';
+
+  function inputBox(opts) {
+    opts = opts || {};
+    const el = $('#modal');
+    const card = $('#modalCard');
+    if (!el || !card) return Promise.resolve(null);
+    card.innerHTML =
+      '<h3>' + esc(opts.title || '输入') + '</h3>' +
+      (opts.message ? '<p>' + opts.message + '</p>' : '') +
+      '<input class="modal-input" id="modalInput" type="text" autocomplete="off" ' +
+      'value="' + esc(opts.value || '') + '" placeholder="' + esc(opts.placeholder || '') + '">' +
+      '<div class="modal-actions">' +
+      '<button class="btn" data-modal="cancel" type="button">' + esc(opts.cancelText || '取消') + '</button>' +
+      '<button class="btn primary" data-modal="ok" type="button">' + esc(opts.okText || '确定') + '</button>' +
+      '</div>';
+    el.classList.add('open');
+    el.setAttribute('aria-hidden', 'false');
+    modalMode = 'input';
+    const inp = card.querySelector('#modalInput');
+    setTimeout(function () { try { inp.focus(); inp.select(); } catch (e) { /* 忽略 */ } }, 60);
+    if (inp) inp.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); closeModal(true); }
+    });
+    return new Promise(function (resolve) { modalResolve = resolve; });
+  }
+
   function closeModal(value) {
     const el = $('#modal');
     if (!el) return;
@@ -187,8 +215,15 @@
     el.setAttribute('aria-hidden', 'true');
     if (modalResolve) {
       const r = modalResolve;
+      const mode = modalMode;
       modalResolve = null;
-      r(!!value);
+      modalMode = 'confirm';
+      if (mode === 'input') {
+        const inp = document.getElementById('modalInput');
+        r(value ? (inp ? inp.value.trim() : '') : null);
+      } else {
+        r(!!value);
+      }
     }
   }
 
@@ -303,6 +338,7 @@
     closeDrawer: closeDrawer,
     onDrawerClose: onDrawerClose,
     confirm: confirmBox,
+    input: inputBox,
     closeModal: closeModal,
     openRowPanel: openRowPanel,
     closeRowPanel: closeRowPanel,

@@ -269,6 +269,21 @@
     return '<button class="section-link" data-nav="' + tab + '" type="button">全部' + UI.icon('chev') + '</button>';
   }
 
+  /* v2.39 首页抽屉：跟设置页同一套 .set-fold 样式，状态单独存 homeFolds，
+     默认展开（不改变原来的浏览习惯），收起过就记住。 */
+  function homeFoldSection(key, title, countText, bodyHtml, open) {
+    return '<div class="set-fold' + (open ? ' open' : '') + '">' +
+      '<button class="section-title set-fold-head" data-home-fold="' + key + '" type="button" aria-expanded="' +
+      (open ? 'true' : 'false') + '" aria-controls="homeBody-' + key + '">' +
+      '<span>' + esc(title) + '</span>' +
+      '<span class="title-side">' +
+      (countText ? '<span class="count">' + esc(countText) + '</span>' : '') +
+      '<i class="sf-chev" aria-hidden="true">' + UI.icon('chev') + '</i>' +
+      '</span></button>' +
+      '<div class="set-fold-body' + (open ? ' open' : '') + '" id="homeBody-' + key + '">' + bodyHtml + '</div>' +
+      '</div>';
+  }
+
   /* ---------- 待办标签：时间 / 地点 / 事件 ---------- */
 
   /* 常见地点后缀：命中即认为这句话里带了地点 */
@@ -619,6 +634,8 @@
   async function homeHtml(todayStr) {
     const totalBytes = state.docs.reduce(function (s, d) { return s + (d.size || 0); }, 0);
     const memos = await DB.listMemos();
+    let homeFolds = {};
+    try { homeFolds = (await DB.getSetting('homeFolds', {})) || {}; } catch (e) { homeFolds = {}; }
 
     /* 待做事项：周期事件 + 备忘录，统一按「事件时间」排序 */
     const events = Events.compute(state.docs, state.series, todayStr);
@@ -756,16 +773,17 @@
       todayScheduleCard(todayStr) +
       '<div class="section-title"><span>本周日程</span><span class="count">点日期看当天</span></div>' +
       calHtml +
-      '<div class="section-title" id="weekAnchor"><span>近一周项目</span><span class="title-side">' +
-      '<span class="count">' + weekDocs.length + ' 份</span>' +
-      (groupKeys.length > 5
-        ? '<button class="section-link" data-week-toggle type="button">' +
-          (weekExpanded ? '收起' : '展开全部 ' + groupKeys.length + ' 个项目') + UI.icon('chev') + '</button>'
-        : '') +
-      '</span></div>' +
-      weekHtml +
-      '<div class="section-title"><span>最近添加的文件</span>' + sectionLink('archive') + '</div>' +
-      recentHtml +
+      '<span id="weekAnchor"></span>' +
+      homeFoldSection('week', '近一周项目', weekDocs.length + ' 份',
+        weekHtml +
+        (groupKeys.length > 5
+          ? '<div class="fold-more"><button class="section-link" data-week-toggle type="button">' +
+            (weekExpanded ? '收起' : '展开全部 ' + groupKeys.length + ' 个项目') + UI.icon('chev') + '</button></div>'
+          : ''),
+        homeFolds.week !== false) +
+      homeFoldSection('recent', '最近添加的文件', recent.length + ' 份',
+        recentHtml + '<div class="fold-more">' + sectionLink('archive') + '</div>',
+        homeFolds.recent !== false) +
       (state.docs.length ? '' : '<div class="import-cta"><button class="btn primary block" data-import-open type="button">' +
         UI.icon('upload') + '从手机导入文件或备份</button>' +
         '<p class="inline-hint" style="text-align:center;margin-top:8px">换手机？电脑端导出备份 zip 后传到手机，点这里导入即可</p></div>');
@@ -3092,6 +3110,19 @@
 
   /* ---------- 设置 ---------- */
 
+  /* v2.39 城市名 → 坐标（open-meteo 的公开 geocoding，不需要 key） */
+  async function geocodeCity(q) {
+    try {
+      const res = await fetch('https://geocoding-api.open-meteo.com/v1/search?name=' +
+        encodeURIComponent(q) + '&count=1&language=zh&format=json', { cache: 'no-store' });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return (d && d.results && d.results[0]) ? d.results[0] : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   /* 设置页的抽屉：标题行就是分区标题（蓝色小竖条 + 手写体），点一下展开内容。
      状态记在 settings.settingsFolds 里，下次进来还是上次的样子。 */
   function setFoldSection(key, title, countText, bodyHtml, open) {
@@ -3121,13 +3152,20 @@
     }
     let hapticsOn = true;
     let weatherBg = true;
+    let weatherCity = null;
     /* 抽屉开合状态：默认全收起，只露出标题行，页面短一大截 */
     let folds = {};
     try {
       hapticsOn = (await DB.getSetting('haptics', true)) !== false;
       weatherBg = (await DB.getSetting('weatherBg', true)) !== false;
+      weatherCity = (await DB.getSetting('weatherCity', null)) || null;
       folds = (await DB.getSetting('settingsFolds', {})) || {};
     } catch (e) { /* 读不到按默认开 */ }
+    /* v2.39 天气城市：手动指定优先，否则显示本次自动定位到的城市（走代理会定位到境外） */
+    const autoPlace = document.documentElement.getAttribute('data-weather-place') || '';
+    const cityDesc = weatherCity
+      ? '当前：' + weatherCity.name + ' · 点击修改'
+      : (autoPlace ? '自动定位：' + autoPlace + ' · 点击手动指定' : '自动按网络定位 · 点击手动指定');
 
     const typeRows = [
       ['文档', info.byType.doc, '#6C8BF5'],
@@ -3185,6 +3223,12 @@
       '<span class="s-desc">按当天天气换背景形态：晴天白云、阴天灰白玻璃云、雨天淡蓝雨丝、雪天玻璃雪花；' +
       '每天联网查一次天气，只用于背景，不显示也不保存天气数据</span></span>' +
       '<span class="switch' + (weatherBg ? ' on' : '') + '"><i></i></span>' +
+      '</button>' +
+      '<button class="setting-item neu press" data-weather-city type="button">' +
+      '<span class="icon-box">' + UI.icon('pin') + '</span>' +
+      '<span class="s-main"><span class="s-title">天气城市</span>' +
+      '<span class="s-desc">' + esc(cityDesc) + '；开着代理时网络定位会落到境外，背景天气就不准了，填自己的城市最稳妥</span></span>' +
+      '<span class="chev">' + UI.icon('chev') + '</span>' +
       '</button>' +
       '</div>', folds.appearance === true) +
 
@@ -3273,7 +3317,7 @@
       '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>', folds.security === true) +
 
       '<div class="section-title"><span>关于</span></div>' +
-      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.38.0') + ' · 数据不上传，无账号，无云端。' +
+      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.39.0') + ' · 数据不上传，无账号，无云端。' +
       '<br>可添加到手机主屏幕，像应用一样全屏使用。</div>';
   }
 
@@ -5207,6 +5251,24 @@
 
       if (e.target.closest('[data-export-backup]')) { doExport(); return; }
 
+      /* 首页抽屉：只切类名，不重绘，滚动位置不跳 */
+      const homeFoldBtn = e.target.closest('[data-home-fold]');
+      if (homeFoldBtn) {
+        const key = homeFoldBtn.getAttribute('data-home-fold');
+        const body = document.getElementById('homeBody-' + key);
+        const box = homeFoldBtn.closest('.set-fold');
+        const open = homeFoldBtn.getAttribute('aria-expanded') !== 'true';
+        homeFoldBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (body) body.classList.toggle('open', open);
+        if (box) box.classList.toggle('open', open);
+        try {
+          const map = (await DB.getSetting('homeFolds', {})) || {};
+          map[key] = open;
+          await DB.setSetting('homeFolds', map);
+        } catch (err) { /* 记不住就只影响下次进来 */ }
+        return;
+      }
+
       /* 设置页抽屉：只切类名，不重绘，滚动位置不跳 */
       const setFoldBtn = e.target.closest('[data-set-fold]');
       if (setFoldBtn) {
@@ -5239,6 +5301,33 @@
         await DB.setSetting('weatherBg', on);
         if (window.App && App.setWeatherBg) await App.setWeatherBg(on);
         UI.toast(on ? '背景已按当天天气显示' : '背景已固定为晴天样式', 'ok');
+        await render('settings');
+        return;
+      }
+
+      if (e.target.closest('[data-weather-city]')) {
+        const saved = (await DB.getSetting('weatherCity', null)) || null;
+        const name = await UI.input({
+          title: '天气城市',
+          message: '填城市名，例如「成都」「杭州」；留空则恢复自动定位。',
+          value: saved ? saved.name : '',
+          placeholder: '留空 = 自动定位',
+          okText: '保存'
+        });
+        if (name === null) return;
+        if (!name) {
+          await DB.setSetting('weatherCity', null);
+          UI.toast('已恢复自动定位', 'ok');
+          if (window.Weather && Weather.forceRefresh) await Weather.forceRefresh();
+          await render('settings');
+          return;
+        }
+        UI.toast('正在查这个城市…', 'ok');
+        const hit = await geocodeCity(name);
+        if (!hit) { UI.toast('没找到这个城市，换个写法试试', 'err'); return; }
+        await DB.setSetting('weatherCity', { name: hit.name, lat: hit.latitude, lon: hit.longitude });
+        UI.toast('天气城市已设为 ' + hit.name, 'ok');
+        if (window.Weather && Weather.forceRefresh) await Weather.forceRefresh();
         await render('settings');
         return;
       }

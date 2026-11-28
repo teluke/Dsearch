@@ -1,6 +1,6 @@
 /* 当日天气 → 背景形态（只影响背景，不显示任何天气数据）
    晴天：洁白云 + 湛蓝天空；阴天：灰白金属光泽玻璃云；雨天：云收起 + 淡蓝雨丝；雪天：玻璃雪花
-   取数走两次公开接口（IP 定位 + 天气码），每天只请求一次，结果写进 settings 缓存；
+   取数走定位 + 天气码两次公开请求，每天只查一次，结果写进 settings 缓存；
    失败、离线、被拒绝都静默回落到上一次的形态，最差是晴天。首屏不等网络。 */
 
 (function () {
@@ -8,6 +8,7 @@
   let cur = 'sunny';
   let enabled = true;
   let refreshing = false;
+  let place = '';          /* 最近一次定位到的城市名，只给设置页展示用 */
 
   /* WMO weather code → 四种形态 */
   function kindOf(code) {
@@ -56,52 +57,92 @@
     }
   }
 
-  /* 两家公开源并行请求，谁先给结果用谁：
-     wttr.in 按 IP 直接给天气码（国内可达），open-meteo 走定位（海外更快）。都不需要 key。
-     任一失败就忽略，两路都空则保持原形态。 */
-  const WWO_SNOW = [179, 182, 227, 230, 317, 320, 323, 326, 329, 332, 335, 338, 350, 362, 365, 368, 371, 374, 377, 392, 395];
-  const WWO_RAIN = [176, 185, 200, 263, 266, 281, 284, 293, 296, 299, 302, 305, 308, 311, 314, 353, 356, 359, 386, 389];
+  /* v2.39 定位修复：以前按 IP 定位（wttr.in 也是按 IP），走代理时出口 IP 会落在境外，
+     东京下雨就把本地背景画成雨。现在先看「IP 时区」与「浏览器时区」对不对得上，
+     对不上就判定 IP 不可信，退回到浏览器时区对应的代表城市；用户在设置里填了城市则最优先。 */
+  const TZ_CITY = {
+    'Asia/Shanghai': [31.23, 121.47, '上海'],
+    'Asia/Chongqing': [29.56, 106.55, '重庆'],
+    'Asia/Urumqi': [43.83, 87.62, '乌鲁木齐'],
+    'Asia/Harbin': [45.80, 126.53, '哈尔滨'],
+    'Asia/Hong_Kong': [22.32, 114.17, '香港'],
+    'Asia/Macau': [22.20, 113.55, '澳门'],
+    'Asia/Taipei': [25.03, 121.57, '台北'],
+    'Asia/Tokyo': [35.69, 139.69, '东京'],
+    'Asia/Seoul': [37.57, 126.98, '首尔'],
+    'Asia/Singapore': [1.35, 103.82, '新加坡'],
+    'Asia/Bangkok': [13.76, 100.50, '曼谷'],
+    'Europe/London': [51.51, -0.13, '伦敦'],
+    'Europe/Paris': [48.86, 2.35, '巴黎'],
+    'Europe/Berlin': [52.52, 13.40, '柏林'],
+    'America/New_York': [40.71, -74.01, '纽约'],
+    'America/Chicago': [41.88, -87.63, '芝加哥'],
+    'America/Los_Angeles': [34.05, -118.24, '洛杉矶'],
+    'Australia/Sydney': [-33.87, 151.21, '悉尼']
+  };
 
-  function kindOfWwo(code) {
-    const c = Number(code);
-    if (!isFinite(c)) return '';
-    if (c === 113 || c === 116) return 'sunny';
-    if (WWO_SNOW.indexOf(c) >= 0) return 'snow';
-    if (WWO_RAIN.indexOf(c) >= 0) return 'rain';
-    if (c === 119 || c === 122 || c === 143 || c === 248 || c === 260) return 'cloudy';
-    return '';
+  function tzName() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; }
   }
 
-  async function fromWttr() {
-    const d = await fetchJson('https://wttr.in/?format=j1', 9000);
-    if (!d || !d.current_condition || !d.current_condition[0]) return '';
-    return kindOfWwo(d.current_condition[0].weatherCode);
+  function setPlace(name) {
+    if (!name) return;
+    place = name;
+    try { document.documentElement.setAttribute('data-weather-place', name); } catch (e) { /* 忽略 */ }
   }
 
-  async function fromOpenMeteo() {
+  /* 定位被判为不可信时提示一次：国内全境同一个时区，兜底只能给代表城市，
+     真正准的城市得用户自己填，所以这里说清入口。 */
+  async function warnProxyOnce(cityName) {
+    try {
+      if (await DB.getSetting('weatherProxyWarned', false)) return;
+      await DB.setSetting('weatherProxyWarned', true);
+      if (window.UI && UI.toast) {
+        UI.toast('定位疑似走代理，天气先按' + cityName + '显示，设置里可改城市');
+      }
+    } catch (e) { /* 提示失败不影响天气 */ }
+  }
+
+  /* 返回 { lat, lon } 或 null；顺带把地名写进 place */
+  async function locate() {
+    let manual = null;
+    try { manual = await DB.getSetting('weatherCity', null); } catch (e) { manual = null; }
+    if (manual && isFinite(Number(manual.lat)) && isFinite(Number(manual.lon))) {
+      setPlace(manual.name || '已指定城市');
+      return { lat: Number(manual.lat), lon: Number(manual.lon) };
+    }
+
+    const tz = tzName();
     const geo = await fetchJson('https://get.geojs.io/v1/ip/geo.json', 6000);
     const lat = geo ? Number(geo.latitude) : NaN;
     const lon = geo ? Number(geo.longitude) : NaN;
-    if (!isFinite(lat) || !isFinite(lon)) return '';
-    const met = await fetchJson('https://api.open-meteo.com/v1/forecast?latitude=' +
-      lat.toFixed(2) + '&longitude=' + lon.toFixed(2) + '&current=weather_code', 6000);
-    if (!met || !met.current) return '';
-    return kindOf(met.current.weather_code);
+    const ipOk = isFinite(lat) && isFinite(lon);
+    const sameTz = !!(geo && geo.timezone && tz && geo.timezone === tz);
+
+    if (ipOk && sameTz) {
+      setPlace(geo.city || geo.region || '');
+      return { lat: lat, lon: lon };
+    }
+    const fb = TZ_CITY[tz];
+    if (fb) {
+      setPlace(fb[2]);
+      await warnProxyOnce(fb[2]);
+      return { lat: fb[0], lon: fb[1] };
+    }
+    if (ipOk) {
+      setPlace(geo.city || geo.region || '');
+      return { lat: lat, lon: lon };
+    }
+    return null;
   }
 
-  /* 谁先回非空结果就用谁，另一路不等 */
-  function lookup() {
-    return new Promise(function (resolve) {
-      let left = 2, done = false;
-      [fromWttr, fromOpenMeteo].forEach(function (fn) {
-        Promise.resolve().then(fn).then(function (k) {
-          if (k && !done) { done = true; resolve(k); return; }
-        }).catch(function () { /* 忽略 */ }).then(function () {
-          left--;
-          if (left === 0 && !done) { done = true; resolve(''); }
-        });
-      });
-    });
+  async function fetchKind() {
+    const pos = await locate();
+    if (!pos) return '';
+    const met = await fetchJson('https://api.open-meteo.com/v1/forecast?latitude=' +
+      pos.lat.toFixed(2) + '&longitude=' + pos.lon.toFixed(2) + '&current=weather_code', 6000);
+    if (!met || !met.current) return '';
+    return kindOf(met.current.weather_code);
   }
 
   /* 后台补一次：拿到新形态就写缓存并换背景；拿不到保持原样 */
@@ -114,7 +155,7 @@
     refreshing = true;
     try {
       try { await DB.setSetting('weatherTryAt', Date.now()); } catch (e) { /* 忽略 */ }
-      const got = await lookup();
+      const got = await fetchKind();
       if (!got) return;
       if (got !== cached) {
         if (enabled) apply(got);
@@ -125,6 +166,14 @@
     } finally {
       refreshing = false;
     }
+  }
+
+  /* 手动改了城市后立刻重查，不受当天缓存与六小时退避限制 */
+  async function forceRefresh() {
+    refreshing = false;
+    try { await DB.setSetting('weatherTryAt', 0); } catch (e) { /* 忽略 */ }
+    try { await DB.setSetting('weatherDay', ''); } catch (e) { /* 忽略 */ }
+    await refresh('');
   }
 
   async function init() {
@@ -155,6 +204,8 @@
     get: function () { return cur; },
     enabled: function () { return enabled; },
     setEnabled: setEnabled,
+    forceRefresh: forceRefresh,
+    city: function () { return place; },
     kindOf: kindOf,
     label: { sunny: '晴', cloudy: '阴', rain: '雨', snow: '雪' }
   };

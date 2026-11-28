@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-27 23:55 ｜ 当前版本：**v2.38.0** ｜ 缓存：`gongzuowenjian-v83`
+> 最后更新：2026-11-28 12:40 ｜ 当前版本：**v2.39.0** ｜ 缓存：`gongzuowenjian-v84`
 
 ---
 
@@ -52,12 +52,16 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.38.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.38.0`
-- SW 缓存 `gongzuowenjian-v83`，清单已含 `./css/sky.css`、`./js/weather.js`；`assets/sky/clouds-m.webp` 不预缓存，走运行时缓存（桌面端永不下载）
-- Git：tag `v2.38.0`（commit `215266f`），已推 `origin/main`，Pages 已生效（线上验收 20/0）
+- 版本 `APP_VERSION = '2.39.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.39.0`
+- SW 缓存 `gongzuowenjian-v84`，清单已含 `./css/sky.css`、`./js/weather.js`、`./assets/sky/clouds-m-still.webp`
+- Git：tag `v2.39.0`（commit 待补），已推 `origin/main`，Pages 已生效（线上验收见 `.workbuddy/pw/_live-v239.js`）
 - 工作区干净，无未提交改动
 
 ---
+
+## 3.5 首页两个抽屉（v2.39）
+
+「近一周项目」「最近添加的文件」是 `.set-fold` 抽屉：标题行 `data-home-fold="week|recent"`，内容 `#homeBody-<key>`，状态存 `settings.homeFolds`（默认展开，收起过就记住）。点击只切类名、不重绘（`views.js` 里 `data-home-fold` 分支），「展开全部 n 个项目」与「全部」入口在 `.fold-more` 里。
 
 ## 4. 天空系统（v2.27 起的重心，改背景先看这节）
 
@@ -87,8 +91,9 @@ node server.js                      # 静态服务，端口 5173
 ### 4.2 四态切换
 
 - 状态写在 `html[data-weather="sunny|cloudy|rain|snow"]`，由 `js/weather.js` 写入
-- 取数：**wttr.in**（`https://wttr.in/?format=j1`，IP 定位，按 WWO 天气码分类）与 **open-meteo**（geojs 定位）**双源竞速**，谁先回用谁
-- 按天缓存 `weatherDay` / `weatherKind`；失败写 `weatherTryAt`，六小时退避
+- 取数（v2.39 起）：**geojs 定位 → open-meteo 天气码**，单一源，不再双源竞速（两源会给出不同形态、互相抢）。定位结果先校验：`geojs.timezone` 与 `Intl.DateTimeFormat().resolvedOptions().timeZone` 不一致 → 判定走代理、IP 不可信 → 退到 `TZ_CITY` 表里该时区的代表城市（中国全境同属 `Asia/Shanghai`，只能给上海），并弹一次提示
+- 手动城市：设置 → 外观与效果 → 天气城市，存 `weatherCity = {name, lat, lon}`，优先级最高；城市名走 open-meteo geocoding 换坐标
+- 按天缓存 `weatherDay` / `weatherKind`；失败写 `weatherTryAt`，六小时退避；改城市时 `Weather.forceRefresh()` 清缓存重查
 - 只改背景形态，**界面上不显示任何天气数值**
 - 设置里有开关 `weatherBg`（默认 true），`App.setWeatherBg(on)` 控制
 
@@ -114,9 +119,10 @@ node server.js                      # 静态服务，端口 5173
 
 **小狗云（v2.32 / v2.33 / v2.37）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。v2.33 起按瓦片原比例铺图并下移落位，桌面透明度再压一档。v2.37 把远层 placements 从 x300/x1000 改到 x940/x1350——原来 x300 的歪头狗整只被近层吐舌狗（x180–540）盖住，现在首屏三朵 x 区间 180–540 / 600–900 / 940–1130 互不重叠。改云只改脚本再重跑，不要手改 `sky.css`。
 
-**手机端烘焙动画图（v2.38）**：`≤700px` 时 `.sky-clouds / .sky-shadows / .sky-float` 全部 `display: none`，改由 `.sky-m > img` 提供云层——一张 `assets/sky/clouds-m.webp`（1600×450、40 帧 @5fps、约 1.2MB、透明动画 WebP，图内已含三层云的浮动 8s/4s/16s + 极小水平呼吸 + 云下淡影）。CSS 侧只有 `skyDriftM` 285s 平移一个 800px 瓦片宽（首尾无缝），不再有 `background-repeat` 平铺。`<picture>` + `source[media]` 保证桌面不下载这张图。视差仍走 `translate`，天气态仍是 `.32 / .25 / 0`。**改云图流程**：先 `make-cloud-anim.py` 重出 `clouds-m.webp`（参数在文件头 `LAYERS`：位置 x/y/宽、浮动幅度、周期、相位、层 alpha），再 `make-sky2.py` 只负责 CSS。
+**手机端单张静态图（v2.39）**：`≤700px` 时 `.sky-clouds / .sky-shadows / .sky-float` 全部 `display: none`，改由 `.sky-m > img` 提供云层——一张 `assets/sky/clouds-m-still.webp`（800×450、29KB）。**没有任何动画**：无 `animation`、无 `will-change`、无 `transform`/`translate`，合成层只有一张 800 宽纹理（DPR3 下 2400×1350），零解码开销。天气态仍是 `.32 / .25 / 0`。`<picture>` + `source[media]` 保证桌面不下载这张图。v2.38 曾用过 1600×450 的 40 帧动画 WebP + 平移，实测解码和纹理内存更吃紧，v2.39 退回静止。
 
-> **⚠ 手机云图别改回 `background-image`**：Safari 不支持把 animated WebP 当 CSS 背景播放，且平铺接缝正是闪烁来源。必须留在 `<img>` 里。
+> **⚠ 手机云图别改回 `background-image`**：平铺接缝正是当初闪烁的来源；Safari 也不给 CSS 背景播放 WebP 动画。必须留在 `<img>` 里。
+> **⚠ 想改回动的**：`make-cloud-anim.py` 仍在，跑一次会同时产出 `clouds-m.webp`（动画）和 `clouds-m-still.webp`（静态首帧），改 `LAYERS` 调位置/幅度/相位/层 alpha。
 
 **滚动冻结（v2.37）**：`app.js` 的 `bindSkyFreeze()` 监听 `scroll`（capture，含内部滚动容器）/ `touchmove` / `wheel` / `touchend`，滚动时给 `html` 加 `.sky-scrolling`，停手 180ms 后移除。`sky.css` 里对应规则把 `.sky-float`、三层 `.sky-cloud`、`.sky-precip i` 和两条明暗伪元素的 `animation-play-state` 设成 `paused !important`。只暂停、不重置：动画停在当前时刻，恢复后从原处继续，云不跳帧；视差 `--wx/--wy` 仍照常更新。切此方案是用户从「冻结 / 单张动画图 / 只烘云层」里选的 A，若仍闪再走云层动画图那条路。
 
