@@ -1,0 +1,133 @@
+# 打包成手机可安装的安装包（APK）——路线与取舍
+
+> 结论先说：**能打，而且代码基本不用改**，但要不要打取决于你更在意「随时更新」还是「像个原生 App」。
+> 这个项目是纯前端 PWA，没有后端、数据全在本机 IndexedDB，所以三种路线都能走通。
+
+---
+
+## 0. 先看清楚现在手里有什么
+
+| 项 | 现状 |
+| --- | --- |
+| 形态 | 纯静态 PWA（`工作文件/` 整个目录），Service Worker 缓存，可离线 |
+| 依赖 | 无后端、无账号、无云端；数据在浏览器 IndexedDB |
+| 已有 | `manifest.json`、图标 192/512、`apple-touch-icon`、SW 离线策略 |
+| 缺的 | 没有原生外壳（APK/AAB），没有签名证书，没有应用商店资质 |
+
+也就是说：**「能不能装到手机上」这件事本身已经解决了**——安卓 Chrome / 微信里「添加到主屏幕」就能像 App 一样用，iOS Safari 同理（分享 → 添加到主屏幕）。
+
+---
+
+## 1. 三条路线
+
+### A. 继续用 PWA（推荐先走这条）
+
+不做任何打包，让用户「添加到主屏幕」。
+
+- 安卓 Chrome：右上角菜单 → 添加到主屏幕 / 安装应用
+- iOS Safari：分享 → 添加到主屏幕
+- 微信内置浏览器不支持安装，需要用系统浏览器打开
+
+**优点**
+
+- 零成本、零签名、零审核，改完推上去刷新即生效
+- 体积等于网页本身（首屏约 300KB，云图 124KB）
+- 现有 Service Worker 已经保证断网可用
+- iOS / 安卓一套代码
+
+**缺点**
+
+- 图标在桌面上，但启动时仍有一小段浏览器白屏（TWA 也有）
+- 微信里点链接默认在微信内打开，不会进已安装的 PWA
+- 用户心理上仍觉得「这是个网页」
+- iOS 对 PWA 的限制更多（无推送、后台受限）
+
+---
+
+### B. Bubblewrap 打包 TWA（最省事的真 APK）
+
+Google 官方工具，把 PWA 包成 Trusted Web Activity —— APK 里没有自己的页面，启动后直接用 Chrome 内核全屏打开你的网址。
+
+```bash
+npm i -g @bubblewrap/cli
+bubblewrap init --manifest https://<你的域名>/manifest.json
+bubblewrap build          # 产出 app-release-signed.apk / .aab
+```
+
+**硬性前提**：必须是 **HTTPS + 真实域名**，并且要在站点根目录放 `/.well-known/assetlinks.json`（把 APK 签名证书的 SHA-256 写进去），否则地址栏会冒出来。
+
+**优点**
+
+- APK 只有 1~2MB（复用系统 Chrome，不打包内核）
+- 页面更新 = 你部署新版本，用户下次打开就是新的，**不用重新装 APK**
+- 有独立图标、独立包名、全屏无地址栏
+- 可以传 Google Play
+
+**缺点**
+
+- 依赖设备上的 Chrome（国内部分机型 Chrome 被裁过/版本老，可能退回 Custom Tab 带地址栏）
+- 离线能力仍靠 Service Worker，第一次必须联网打开过
+- 需要域名 + HTTPS + assetlinks，GitHub Pages 可以满足（`https://teluke.github.io/Dsearch/`）
+- 国内安卓应用商店基本不收 TWA 包
+
+---
+
+### C. Capacitor 打包（真离线，能调原生能力）
+
+把 `工作文件/` 整个目录塞进 APK，用系统 WebView 加载本地文件，不依赖域名。
+
+```bash
+npm i @capacitor/core @capacitor/cli @capacitor/android
+npx cap init 工作文件 com.yourname.workfiles --web-dir=工作文件
+npx cap add android
+npx cap sync
+npx cap open android      # 在 Android Studio 里 Build APK
+```
+
+**优点**
+
+- 完全离线，首次打开也不需要网络
+- 能调原生：系统分享、相机、文件选择器、通知、后台任务
+- 可上国内应用商店（需要软著 / 备案，另说）
+- 一份代码同时出安卓和 iOS
+
+**缺点**
+
+- **每次发版都要重新打包、重新分发**，用户得手动装新版（这是最大代价，你现在「改完刷新即生效」的便利会消失）
+- 体积从 2MB 涨到 8~20MB（WebView 壳 + 资源）
+- WebView 版本由用户设备决定，老安卓（Android 7/8 的 WebView）可能缺 API：
+  - `@property`（CSS 自定义属性动画）—— v2.41 已经不用了
+  - `requestIdleCallback` —— 代码里有 `setTimeout` 兜底
+  - WebP alpha / `object-fit` —— Android 8+ 都支持
+- 相机、文件选择要额外配权限与 `FileProvider`
+- iOS 还要 Apple 开发者账号（$99/年）才能装到别人手机上
+
+---
+
+## 2. 三者对照
+
+| | A. PWA | B. TWA | C. Capacitor |
+| --- | --- | --- | --- |
+| 用户怎么装 | 添加到主屏幕 | 下载 APK 安装 | 下载 APK 安装 |
+| 发版后怎么更新 | 刷新即最新 | 自动最新 | **要重新装** |
+| 首次能否离线 | 否（要先联网一次） | 否 | 能 |
+| APK 体积 | — | 1~2MB | 8~20MB |
+| 需要域名/HTTPS | 有更好 | **必须** | 不需要 |
+| 需要签名证书 | 否 | 是 | 是 |
+| 能否调原生能力 | 有限 | 无 | 全 |
+| 国内商店可上架 | 否 | 基本不行 | 可行（需资质） |
+| 维护成本 | 最低 | 低 | 最高 |
+
+---
+
+## 3. 对这个项目的建议
+
+1. **先确认需求**。如果只是「想在手机上像 App 一样打开、不想每次输网址」——PWA 添加主屏幕已经够用，`manifest.json` 里 `display: standalone` 会自动全屏。
+2. **要一个能发给别人安装的文件** → 走 **B（TWA）**。改动最小，页面上线即更新，代价只有一张签名证书和 `assetlinks.json`。
+3. **要彻底离线、要调相机/通知/后台同步** → 走 **C（Capacitor）**。但要想清楚：从此每次改代码都得重新打包发版一次，现在这套「推 GitHub Pages 就完事」的流程会变成两套。
+
+## 4. 无论走哪条，都要先处理的三件事
+
+1. **数据迁移**：IndexedDB 跟着「域 + 包名」走。换成 APK 后是全新的存储，用户得先用「设置 → 备份」导出 zip，再在新壳里导入。
+2. **签名证书要留档**：丢了证书就无法给已安装的用户升级，只能换包名重来。
+3. **图片/二维码里的内网地址**：局域网同步用的是内网 IP，APK 里同样能用，但 Android 9+ 默认禁止明文 HTTP，需要在 `network_security_config.xml` 里放行内网网段，否则扫码配对会失败。

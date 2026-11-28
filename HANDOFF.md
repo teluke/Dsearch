@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-28 14:20 ｜ 当前版本：**v2.40.0** ｜ 缓存：`gongzuowenjian-v85`
+> 最后更新：2026-11-28 14:40 ｜ 当前版本：**v2.41.0** ｜ 缓存：`gongzuowenjian-v86`
 
 ---
 
@@ -52,9 +52,10 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.40.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.40.0`
-- SW 缓存 `gongzuowenjian-v85`，清单已含 `./css/sky.css`、`./js/weather.js`、`./assets/sky/clouds-m-still.webp`、`./assets/sky/clouds-t-still.webp`
-- Git：tag `v2.40.0`（commit `8043274`），已推 `origin/main`，Pages 已生效（线上验收 23/0）
+- 版本 `APP_VERSION = '2.41.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.41.0`
+- SW 缓存 `gongzuowenjian-v86`，清单已含三张云图：`./assets/sky/clouds-{m,t,d}-still.webp`
+- `css/sky.css` 39KB（v2.40 时是 654KB，云图 base64 已全部移出）
+- Git：tag `v2.41.0`，已推 `origin/main`
 - 工作区干净，无未提交改动
 
 ---
@@ -63,137 +64,85 @@ node server.js                      # 静态服务，端口 5173
 
 「近一周项目」「最近添加的文件」是 `.set-fold` 抽屉：标题行 `data-home-fold="week|recent"`，内容 `#homeBody-<key>`，状态存 `settings.homeFolds`（默认展开，收起过就记住）。点击只切类名、不重绘（`views.js` 里 `data-home-fold` 分支），「展开全部 n 个项目」与「全部」入口在 `.fold-more` 里。
 
-## 4. 天空系统（v2.27 起的重心，改背景先看这节）
+## 4. 天空系统（v2.41 起：一张静止位图，不要再加动画）
 
-### 4.1 DOM 结构（`index.html` 第 18–35 行）
+### 4.1 一句话
+
+天空 = 一层 SVG 渐变（`--sky-img`）+ **一张静止云图**（三档）。全端零动画、零 will-change、零 transform，切页 / 滚动 / 滑动查看时背景一个像素都不变。
+
+> **⚠ v2.41 的核心约束：桌面也别再加云层动画**
+> v2.27~v2.40 试过三层漂移、上下浮动、指针视差、滚动冻结，都只能把「背景偶尔爆闪」压小，压不掉。根因是背景层一边跑动画一边被重绘，合成与光栅抢资源。锁成一张静态位图之后，这类闪从机制上不存在了。想动云之前先想清楚：值不值得把爆闪换回来。
+
+### 4.2 DOM（`index.html` 第 20–33 行）
 
 ```html
-<div class="sky" id="sky" aria-hidden="true">
-  <div class="sky-float">      <!-- v2.36 浮动容器，三条动画挂这里 -->
-    <div class="sky-shadows">  <!-- v2.29 云影，3 层 -->
-      <div class="sky-cloud c3"></div><div class="sky-cloud c2"></div><div class="sky-cloud c1"></div>
-    </div>
-    <div class="sky-clouds">   <!-- 云，3 层 -->
-      <div class="sky-cloud c3"></div><div class="sky-cloud c2"></div><div class="sky-cloud c1"></div>
-    </div>
-  </div>
-  <picture class="sky-m" id="skyM">                  <!-- v2.38 手机专用云图 -->
-    <source media="(max-width: 700px)" srcset="assets/sky/clouds-m.webp" type="image/webp">
-    <img alt="" width="1600" height="450" ...>       <!-- 桌面回落 1px 占位 -->
-  </picture>
-  <div class="sky-precip"><i></i><i></i><i></i></div>  <!-- 雨丝 / 雪花，3 层 -->
-  <div class="sky-light" id="skyLight"></div>          <!-- 光照层 -->
-</div>
+<picture class="sky-d" id="skyD">            <!-- >1200px -->
+  <source media="(min-width: 1201px)" srcset="assets/sky/clouds-d-still.webp" type="image/webp">
+  <img src="data:image/gif;base64,..." width="2200" height="1240" decoding="async">
+</picture>
+<picture class="sky-m" id="skyM">            <!-- ≤1200px -->
+  <source media="(max-width: 700px)"  srcset="assets/sky/clouds-m-still.webp" type="image/webp">
+  <source media="(max-width: 1200px)" srcset="assets/sky/clouds-t-still.webp" type="image/webp">
+  <img src="data:image/gif;base64,..." width="1200" height="675" decoding="async">
+</picture>
+<div class="sky-precip"><i></i><i></i><i></i></div>   <!-- 雨雪，唯一还在动的一层 -->
 ```
 
-`.sky` 是 `position:fixed; inset:0; z-index:0; pointer-events:none`，独立合成层（translateZ(0) + will-change + isolation + contain）；`.app` 的 z-index 是 1，压在天空之上。所有天空样式都在 `sky.css`。
+`<picture>` 分档靠 `source[media]`：另一半屏宽不匹配时只走 `img` 的 1px 占位，**不会下载大图**。两个档的 `<img>` 都带 `width/height`，避免加载完成时把布局顶一下。
 
-### 4.2 四态切换
+### 4.3 三档云图
 
-- 状态写在 `html[data-weather="sunny|cloudy|rain|snow"]`，由 `js/weather.js` 写入
-- 取数（v2.39 起）：**geojs 定位 → open-meteo 天气码**，单一源，不再双源竞速（两源会给出不同形态、互相抢）。定位结果先校验：`geojs.timezone` 与 `Intl.DateTimeFormat().resolvedOptions().timeZone` 不一致 → 判定走代理、IP 不可信 → 退到 `TZ_CITY` 表里该时区的代表城市（中国全境同属 `Asia/Shanghai`，只能给上海），并弹一次提示
-- 手动城市：设置 → 外观与效果 → 天气城市，存 `weatherCity = {name, lat, lon}`，优先级最高；城市名走 open-meteo geocoding 换坐标
-- 按天缓存 `weatherDay` / `weatherKind`；失败写 `weatherTryAt`，六小时退避；改城市时 `Weather.forceRefresh()` 清缓存重查
-- 只改背景形态，**界面上不显示任何天气数值**
-- 设置里有开关 `weatherBg`（默认 true），`App.setWeatherBg(on)` 控制
+| 档 | 文件 | 尺寸 | 体积 | 铺法 |
+| --- | --- | --- | --- | --- |
+| 桌面 >1200 | `clouds-d-still.webp` | 2200×1240 | 124KB | `object-fit:cover; object-position:50% top`，顶部对齐 |
+| 平板 701~1200 | `clouds-t-still.webp` | 1200×675 | 46KB | `width:100%; height:auto; top:100px` |
+| 手机 ≤700 | `clouds-m-still.webp` | 800×450 | 30KB | 800×450 定尺、`left:0; top:110px`，只露左边一段 |
 
-### 4.3 云层怎么动
+- 不透明度：桌面 .42 / 移动 .32；阴天 .34 / .25 并 `filter: grayscale(.5)`；雨雪整层 `opacity: 0`（1.2s 过渡）
+- 云顶位置：桌面图内 `y=190` → 1440×900 下屏上 138px（顶栏下缘 121px）；平板 `top:100` + 图内 35；手机 `top:110` + 图内 30。`audit-v241.js` 会按缩放比换算后断言
+- 桌面露出四朵（x 区间 `200-630 / 760-1090 / 1180-1412 / 1560-1960`），平板图内三朵纵向分层，手机三朵横向错开
 
-三层 `.sky-cloud`，`width: calc(100% + var(--tile-w))`，`background-size: var(--tile-w) var(--tile-h)` 等比平铺，动画 `skyDrift` 从 `translate3d(0,0,0)` 到 `translate3d(calc(var(--tile-w) * -1),0,0)`，位移正好一个平铺宽度 → 无缝循环。
+### 4.4 怎么改云
 
-| 层 | 时长 | 说明 |
+```bash
+cd ~/Desktop/Dsearch
+python .workbuddy/tmp/make-cloud-anim.py    # 输出 工作文件/assets/sky/*.webp
+```
+
+`SPECS` 三档，改坐标 / 宽度后重跑即可。脚本自带三条自检：相邻两朵横向不重叠、首末行列 alpha 为 0、低 alpha 像素 RGB 不偏暗（偏暗直接 `assert` 报错）。**别手改 asset 里的 webp。**
+
+> **⚠ 贴图黑框的根因（v2.41 修掉，别再踩）**
+> 有损 WebP 会把 alpha 极低的像素 RGB 压成原图的深蓝底（实测 alpha 1~30 段 RGB 均值 `45,70,98`），浏览器双线性插值把这层深色渗到云轮廓外，看着就是一圈灰黑描边、远看像矩形块。
+> 修法两条：`retone()` 把 RGB 按 alpha 重新映射（alpha→0 填天空色 `176,210,240`，低 alpha 混向云白 `252,253,255`，即使渲染器完全忽略 alpha 也只看到淡蓝）；`feather()` 四周 alpha 逐像素渐隐。保存用有损 q95 + `alpha_quality=100`，存完回读校验 low-alpha 平均 RGB 最小值 > 120。
+> **`retone()` 不能省**，删了黑框立刻回来。
+
+### 4.5 天气与雨雪
+
+- 四态写 `html[data-weather="sunny|cloudy|rain|snow"]`，由 `js/weather.js` 写
+- 取数：geojs 定位 → open-meteo 天气码，单源；`geojs.timezone` 与 `Intl` 不一致 → 判走代理 → 退 `TZ_CITY`；手动城市存 `weatherCity`，优先级最高
+- 雨雪：`.sky-precip` 三层瓦片 + 两条伪元素明暗带（`v2.28`），是现在**唯一还在动的背景**；雨丝下落 `skyFall`，明暗带走 `skySheetPan`，位移量都等于图案周期，接回严丝合缝
+- 雨雪视差：`--wx/--wy` 写在 `#sky` 上，但 `bindSkyParallax()` 只在 `rain`/`snow` 两态才写值 —— 晴阴两态鼠标怎么动都不触发天空层样式重算
+- 滚动冻结（v2.37）：`bindSkyFreeze()` 给 `html` 加 `.sky-scrolling`，`sky.css` 里 `animation-play-state: paused !important`。现在要暂停的只剩 `.sky-precip i` 与两条伪元素
+
+### 4.6 已经删掉的东西（别再捡回来）
+
+| 删掉的 | 原来干什么 | 为什么删 |
 | --- | --- | --- |
-| `.c3`（远） | 540s | 最慢，几乎不动 |
-| `.c2`（中） | 400s | |
-| `.c1`（近） | 285s | 最快 |
-
-`--tile-w / --tile-h`：桌面 `1600px / 900px`，窄屏 `760px / 427.5px`（`@media` 覆盖）。**高度必须按瓦片比例算**，用容器百分比会把小狗纵向压扁（v2.33 修掉）。
-
-三层落位（v2.40 起 `--cloud-top` 全部取消，`top: 0`，屏幕位置直接等于瓦片内坐标）：近层 y=132、中层 212、远层 262，云体最上沿 134px，稳在顶栏下缘（约 121px）之下。
-
-**云层视差（v2.30）**：`--wx` / `--wy` 现在写在 `.sky` 根节点（`#sky`）上，子层继承。`.sky-clouds .c3/.c2/.c1` 用独立的 `translate` 属性反向偏 2 / 3 / 4px。v2.40 起漂移的 `transform` 在容器上、视差的 `translate` 在子元素上，两条通道彻底分开，互不覆盖。
-
-**云影同步（v2.31）**：`.sky-shadows .c3/.c2/.c1` 的 `translate` 在光源偏移后再加同一份 `--wx/--wy` 视差，过渡统一 `.16s`。
-
-**上下浮动（v2.33 / v2.34 / v2.36）**：`@property` 注册 `--float-c1/c2/c3`，48/62/76s linear 循环改值（±5/±4/±3px，单周期 `-N → +N → -N`，两端不停顿）。v2.36 起动画挂在新增的 `.sky-float` 容器（包住云与影），**不再挂在 `.sky`**——背景底图本身 `animation: none`，滚动时不会因整棵背景子树每帧重算样式而闪一下。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；低动效下 `.sky-float` 动画整体关闭。
-
-**小狗云（v2.32 / v2.33 / v2.37 / v2.40）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，边缘 alpha 全 0 才能无缝循环。改云只改脚本再重跑，不要手改 `sky.css`。
-
-> **⚠ v2.40 的核心约束：三层必须同速**
-> 以前三层各走 285 / 400 / 540s，位移差随时间累积，跑几小时后三朵必然错位叠在一起——调坐标只能把碰撞往后推。现在 `skyDrift` 挂在 `.sky-clouds` / `.sky-shadows` 容器上（420s 走完一个 1600px 瓦片），三层共用一个时钟，相对位置一格不差。**别再把 `animation` 加回 `.sky-cloud`**，否则互压会复发。
-> 排布：近层 x=90 与 1190 两份（w 360），中层 x=530 一份（w 300），远层 x=910 一份（w 190）。实测 alpha 区间 `92-447 / 532-827 / 911-1098 / 1192-1547`，两两间隔 84~94px。中远层各一份就够铺满一屏；加上去会挤，`audit-v240.js` 的跨层区间比对会报重叠。
-
-**移动端单张静态图（v2.39 / v2.40）**：`≤1200px` 时 `.sky-clouds / .sky-shadows / .sky-float` 全部 `display: none`，改由 `.sky-m > img` 提供云层。**没有任何动画**：无 `animation`、无 `will-change`、无 `transform`/`translate`，零解码开销。天气态仍是 `.32 / .25 / 0`。
-- `≤700px`：`assets/sky/clouds-m-still.webp`，800×450 / 29KB，1:1 铺、`left: 0`、`top: 110px`（只露出左边一段，与 v2.39 完全一致）
-- `701~1200px`：`assets/sky/clouds-t-still.webp`，1200×675 / 46KB，`width: 100%; height: auto; top: 100px` 按视口宽等比铺满；图内三朵纵向分层（y 区间 `36-292 / 310-509 / 529-670`），互不遮挡
-`<picture>` + 两条 `source[media]` 分档，桌面匹配不上时走 1px 占位、**不下载这两张图**。v2.38 曾用过 1600×450 的 40 帧动画 WebP + 平移，实测解码和纹理内存更吃紧，v2.39 退回静止。
-
-> **⚠ 云图别改回 `background-image`**：平铺接缝正是当初闪烁的来源；Safari 也不给 CSS 背景播放 WebP 动画。必须留在 `<img>` 里。
-> **⚠ 改尺寸就改脚本**：`make-cloud-anim.py` 里 `SPECS` 两档（手机 800×450 `stacked=False`、平板 1200×675 `stacked=True`，`stacked` 会断言三朵纵向不重叠），改坐标/宽度后重跑即可，别手改 webp。
-
-**滚动冻结（v2.37）**：`app.js` 的 `bindSkyFreeze()` 监听 `scroll`（capture，含内部滚动容器）/ `touchmove` / `wheel` / `touchend`，滚动时给 `html` 加 `.sky-scrolling`，停手 180ms 后移除。`sky.css` 里对应规则把 `.sky-clouds`、`.sky-shadows`（v2.40 起漂移挂在这两个容器上）、`.sky-float`、三层 `.sky-cloud`、`.sky-precip i` 和两条明暗伪元素的 `animation-play-state` 设成 `paused !important`。只暂停、不重置：动画停在当前时刻，恢复后从原处继续，云不跳帧；视差 `--wx/--wy` 仍照常更新。切此方案是用户从「冻结 / 单张动画图 / 只烘云层」里选的 A，若仍闪再走云层动画图那条路。
-
-> **⚠ 影层矩形**：高斯模糊前必须垫 110px 透明边，影层缩放必须用双线性 + alpha 截断；否则模糊/缩放会把 alpha 渗到整块矩形，叠在天空上就是淡蓝方块。
-> **⚠ 原图隐私**：`puppy-clouds.jpg` 只在本地 `.workbuddy/tmp/source/`，不要 `git add`。
-
-> **⚠ 拷贝层必须补 `--tile-w` / `--tile-h`**：v2.29 加 `.sky-shadows` 时忘了给新容器定义 `--tile-w`，子元素宽度算出 0，整层完全不可见；v2.33 同理，缺 `--tile-h` 会让 `background-size` 的第二个值失效。
-> **⚠ 别用容器百分比当云层高度**：会把 1600×900 的瓦片拉变形，小狗被压扁。改高度必须同步改 `--tile-h`。
-
-### 4.4 云影（v2.29）
-
-- `.sky-shadows` 与 `.sky-clouds` 同结构、同 `skyDrift` 动画 → 影子与云逐帧同速
-- 影子图是**单独的图**：`puppy_cloud_assets.py` 的 `shadow()` 取云轮廓，垫 110px 透明边后高斯模糊、双线性缩放、截断低 alpha，烘成 WebP；不靠运行时 `filter`
-- 三层按同一组变量缩放，远层薄而短、近层厚而长
-- 雨、雪两态 `.sky-shadows { opacity: 0 }`（1.2s 过渡，与云同步淡出）
-
-**光源与时段（v2.30）**：`.sky-shadows` 上四个变量——`--sh-dx` 横向比例、`--sh-dy` 纵向、`--sh-len` 影长、`--sh-k` 深浅。
-
-| 条件 | 效果 |
-| --- | --- |
-| 晴天 | `dx=1`、`dy=.78`、`k=1.16` → 统一压向右下，略深 |
-| 阴天 | `dx=.1`、`dy=1.1`、`len=.92`、`k=.82` → 几乎正下，更淡更短 |
-| `data-daypart` | 正午最短（`len=.74`）、早/晚拉长（1.22 / 1.3）、夜间更短更淡 |
-
-`data-daypart` 由 `app.js` 的 `markDaypart()` 写，按小时分 morning/midday/afternoon/evening/night，每 10 分钟校一次。
-
-> **⚠ 特异性**：阴天云规则 `:root[data-weather="cloudy"] .sky-cloud.c1` 比 `.sky-shadows .c1` 强，会压掉影子的透明度。已把阴天云规则限定到 `.sky-clouds` 内，影子规则补全成 `.sky-shadows .sky-cloud.c1`。新加天气规则记得别写成全局 `.sky-cloud.*`。
-
-### 4.5 雨雪明暗流动（v2.28）
-
-`.sky-precip::before` / `::after` 两层铺 `repeating-linear-gradient(90deg, 暗-亮-暗)`，元素自身 `rotate()` 造斜角，再沿本地 x 平移。
-
-**无缝的关键：平移量 = 正好一个条带周期** `calc(var(--sheet-p) * -1)`。图案周期和位移同步，接回时严丝合缝，不会每轮“跳一下”。
-
-| 天气 | 主层（大尺度暗涌） | 纹理层（反向） |
-| --- | --- | --- |
-| 雨 | `--sheet-p: 860px` / 175s / tilt -11deg，峰值 `rgba(20,46,78,.12)` | 250px / 64s / -5deg / reverse |
-| 雪 | 900px / 200s / -5deg，白色高光峰值 `.15` | 380px / 110s / -3deg / reverse |
-
-- 斜角、周期、时长、方向全不同，才不会叠成整齐梳齿
-- `inset: -45% -30%`，给 11° 旋转留足余量，四角不露空
-- 只动 `transform` + `will-change`，走合成器
-- 晴、阴两态不生成这两层
-- 雪天云本来就收起，所以高光带落在整片雪空上，观感类似“云后光扫过”
-
-### 4.6 雨雪视差（v2.29）
-
-`app.js` 的 `bindSkyParallax()`：`pointermove` 把指针换成 -1..1 写进 `.sky-precip` 的 `--wx` / `--wy`，一次 rAF 一帧。
-
-CSS 用**独立的 `translate` 属性**（不与下落动画抢 `transform`），按远近乘 8 / 16 / 24px，横纵幅度不同。只有 rain / snow 生效，晴阴 `translate: none`。`mouseleave` / `blur` 归零；低动效时 JS 直接不绑。
-
-### 4.7 改天空的正确姿势
-
-**不要直接编辑 `css/sky.css`** —— 它是 `.workbuddy/tmp/make-sky2.py` 的产物，手改会在下次生成时被覆盖。
-
-```
-改 .workbuddy/tmp/make-sky2.py  →  python .workbuddy/tmp/make-sky2.py  →  验收截图
-```
-
-脚本里 SVG 拼接有 `%` 格式化，写 `%` 要转义成 `%%`（踩过一次，`x=-60%` 直接抛异常）。
-
----
+| `.sky-float` / `@property --float-cN` / 三个 float 关键帧 | 云上下浮动 | 背景不允许动 |
+| `.sky-clouds` / `.sky-shadows` / `.sky-cloud.c1~c3` + `skyDrift` | 三层漂移与云影 | 同上；顺带省掉 6 张 1600×900 纹理 |
+| `--cloud-a/b/c[-grey]` / `--cloud-shadow-*` 与 9 张 base64 | 内嵌在 sky.css 里的云图 | CSS 从 654KB 降到 39KB |
+| `#skyLight` + `bindSkyLight()` | 光标聚光灯 | 跟随指针就是「背景在动」，还白占一层显存 |
+| `markDaypart()` / `data-daypart` | 云影按太阳高度调长 | 云影没了，留着只是每 10 分钟触发一次全站样式重算 |
 
 ## 5. 近期版本做了什么
+
+### v2.41.0 — 全端背景静止 / 贴图黑框 / 输入卡顿 / 查看器可编辑
+1. 桌面端背景改成一张静止云图 `clouds-d-still.webp`（2200×1240/124KB），删掉三层瓦片漂移、上下浮动、指针视差、光标聚光灯；`sky.css` 654KB → 39KB，合成层从 6 张 1600×900 纹理降到 1 张
+2. 修掉狗狗贴图边缘的灰黑方框：有损 WebP 把低 alpha 像素 RGB 压成深蓝底（实测 `45,70,98`），插值时渗成描边。改成 RGB 按 alpha 重映射 + 四周羽化 + `alpha_quality=100`，存完回读校验
+3. 搜索输入卡到只显示拼音：组字期间不检索、只换 `#searchResults` 不重建整页、正文小写按 `updatedAt` 指纹缓存、关键词表挪进 `requestIdleCallback`、结果一次最多 60 行。查询页切页 400ms → 6ms，单次检索 10ms
+4. 查看器头部加铅笔按钮，点开就是「文件详情」抽屉，保存后标题同步
+5. `audit-v241.js` 38 项全过；`v230/231/232/233/234/236/237/238/239/240` 因测的是已删除的三层云而作废
+
 
 ### v2.25.0 — 备忘录/待办视觉重构
 修 `.memo-t-text` 压过 `.todo-title` 的特异性问题（补 `.memo-t-text.todo-title`）。
@@ -290,6 +239,7 @@ node audit-v237.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
+| `audit-v241.js` | 38 | 三档云图分档与零动画、贴图低 alpha 为浅色、首末行列透明、云顶在顶栏下、连切 8 页与滚动后背景几何不变、sky.css < 60KB 无内嵌云图、输入框不失焦、组字期间不检索、结果 60 行上限、查看器编辑入口 |
 | `audit-v237.js` | 20 | 滚动冻结全部天空动画、停手恢复不跳帧、桌面三云区间分离、手机端同样生效 |
 | `audit-v236.js` | 15 | 天空独立合成层、无白色光晕与顶栏模糊、浮动迁到 .sky-float、滑动无报错 |
 | `audit-v235.js` | 15 | 整页动画无 opacity、逐帧 opacity=1、连点串行化、异步等待期旧页仍在、低动效 |
@@ -315,7 +265,23 @@ node audit-v237.js
 
 ### 已知的既有失败（与近期改动无关，别当回归）
 
-`audit-v17.js`（2 项）、`audit-v21.js`（3 项）、`audit-v25.js`（3 项）、`audit-display.js`（超时）
+`audit-v17.js`（2 项）、`audit-v21.js`（3 项）、`audit-v25.js`（3 项）、`audit-display.js`（超时）、
+`audit-filters.js`（用 `#globalSearch`，但 v2.30 起搜索框只在主页，非首页 fill 必然超时）
+
+### v2.41 起作废的脚本（测的是已删除的三层云，别当回归）
+
+`audit-v225.js`、`v230.js`、`v231.js`、`v232.js`、`v233.js`、`v234.js`、`v236.js`、`v237.js`、`v238.js`、`v239.js`、`v240.js`
+
+它们第 1 节就去取 `.sky-clouds .c3` / `.sky-shadows .c1`，元素不存在 → `getComputedStyle(null)` 抛错，后面整段不再执行。这些脚本覆盖的功能已由下面几套接住：
+
+| 原脚本测的功能 | 现在由谁覆盖 |
+| --- | --- |
+| 云层 / 云影 / 视差 / 浮动 / 贴图分档 | `audit-v241.js` |
+| 切页不空白、动画只推 transform、连点串行 | `audit-v235.js` |
+| 课表收敛、日课表、关键词行 | `audit-v226.js`、`audit-v230` 的课表断言（已随脚本作废，改由 `new-ui` + `searchview` 兜） |
+| 雨雪明暗流动 | `audit-v228.js`（不碰云层，仍可跑） |
+| 界面骨架 / 抽屉 / 导航 | `audit-new-ui.js` |
+| 搜索与筛选 | `audit-searchview.js`、`audit-kwfilter.js`、`audit-kwmark.js`、`audit-kwmulti.js`、`audit-kwrow.js` |
 
 ### 写审计脚本的注意点
 
@@ -340,14 +306,18 @@ node audit-v237.js
 9. **切页两个坑，别只修一个**：① v2.34 前渲染等待期两页皆空，只剩亮天空；现在旧页保持可见，目标页 `.view-waiting`（`position:absolute` 离屏、保留宽度读 `clientWidth`），渲染完才换页，别把 `view-waiting` 改回 `display:none`。② v2.35 发现 `playViewPush()` 的整页 `opacity .45→1` 才是残留爆闪——页面透明，淡入时亮天空透上来；关键帧只留 `transform`，`will-change` 也别写 opacity。`switchTab()` 必须串行入队，连点时旧任务不能抢回 active；判断当前页看真实 `.view.active`，别信 `Views.state.tab`（它在 `go()` 开头就改了）。
 10. **滑动闪背景查「亮底竞争」**：v2.36 前 `html` 有三道白色径向渐变、`.app::before` 有 30px 模糊白光晕、`.appbar` 有 `backdrop-filter`，天空又是 `z-index:-1` 的普通固定层；滚动时先画亮底再补合成层就会闪。现在天空独立合成层 `z-index:0`、`.app` 为 1，亮底和模糊全删，浮动动画只挂 `.sky-float`。**别再把渐变/模糊加回去，也别把云浮动动画挂回 `.sky`。**
 11. **滚动冻结只切 `animation-play-state`，别重置动画**。改成 `animation:none` 或改关键帧会让云回到起点（跳帧），观感比闪更差。`paused !important` 必须覆盖 `.sky-float` / 三层云 / `.sky-precip i` 与两条伪元素，漏一条天气切换时仍会闪。`scroll` 监听要 `capture:true` 才接得住抽屉/弹窗内部的滚动。
-12. **云层 placements 别 pairwise 靠得太近**：三层云宽 190~360px，同一瓦片里若两个 x 区间重叠，近层会把远层整只压住（v2.37 前歪头狗就这样）。新排布后要截图人工核对，区间分离不等于视觉不重叠（还要看 y 与瓦片内的实际狗体边界）。
+12. **贴图边缘发黑/发灰，先查 alpha 极低处的 RGB**。有损 WebP 会把 `a<30` 的像素 RGB 压成原图底色（我们这批素材是深蓝 `45,70,98`），浏览器双线性插值时深色渗到轮廓外，就是一圈灰黑描边、远看像方块。**只查 alpha 是不够的**——alpha 全 0 不代表插值后干净。修法是生成时把 RGB 按 alpha 重映射（`make-cloud-anim.py` 的 `retone()`），保存再加 `alpha_quality=100`，并在存盘后回读校验 low-alpha 的平均 RGB。
+13. **中文输入卡到只显示拼音，查「每次按键重建输入框」**。`input` 事件里整页 `innerHTML=` 会换掉 `<input>` 本身 → 失焦、组合串被清、输入法被打断。改法是只更新结果容器；同时在 `compositionstart` 到 `compositionend` 之间完全不检索（`e.isComposing` 也要判，两个信号都认），否则一次拼音会连触发好几次全库搜索。
+14. **同步计算超过 100ms 的渲染块，挪到 `requestIdleCallback`**。关键词关联表要遍历全部正文（180 份实测 380ms），同步算会把切页卡住。现在先渲染 `.kw-skeleton` 占位，空闲时算完再 `outerHTML` 替换 —— 内容是同一份，用户只多等了半秒，但切页从 400ms 变成 6ms。
+15. **云层 placements 别 pairwise 靠得太近**：三层云宽 190~360px，同一瓦片里若两个 x 区间重叠，近层会把远层整只压住（v2.37 前歪头狗就这样）。新排布后要截图人工核对，区间分离不等于视觉不重叠（还要看 y 与瓦片内的实际狗体边界）。
 
 ---
 
 ## 8. 待做方向（下一轮候选，都没开工）
 
 1. **页签侧滑手势**：现在切页是按钮触发的 iOS 式 push，可以再给手机端加边缘右滑返回，方向按 `TABS` 顺序复用 `playViewPush()`。
-2. **云图细线随天气微调**：三款云的细线目前晴天/阴天只换灰阶，可把阴天的纹理透明度再压低一档，让阴云更软。
+2. **APK 打包（用户问过，未决策）**：路线与取舍见 `docs/PACKAGING.md`。默认推荐继续用 PWA「添加到主屏幕」，真要 APK 再走 Bubblewrap(TWA) 或 Capacitor。
+3. **首屏 vendor 瘦身**：`index.html` 同步加载了 tesseract / xlsx / mammoth / pdf.js 共约 4MB，只有用到才需要。改成按需动态 `import()` 能把首屏脚本解析时间砍掉一大截，是可以继续挖的下一步。
 
 ---
 

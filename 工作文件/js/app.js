@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.40.0';
+  window.APP_VERSION = '2.41.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -214,24 +214,38 @@
     });
   }
 
-  /* 全局搜索栏：任何界面常驻顶部，输入即进入查询并实时出结果 */
+  /* 全局搜索栏：只在主页出现，输入即进入查询并实时出结果。
+     v2.41：输入法组字期间不触发检索 —— 否则一次拼音输入会连打好几次全库搜索，
+     主线程被占满，输入框里只剩拼音、候选字迟迟上不来。 */
   function bindGlobalSearch() {
     const input = $('#globalSearch');
     const clearBtn = $('#globalSearchClear');
     if (!input) return;
 
     let timer = null;
-    input.addEventListener('input', function () {
-      if (clearBtn) clearBtn.hidden = !input.value;
+    let composing = false;
+
+    async function fire() {
       clearTimeout(timer);
-      timer = setTimeout(async function () {
-        if (input.value === Views.state.search.q) return;
-        await Views.setSearchQuery(input.value);
-        /* 跳到查询页后保持焦点，继续输入不中断 */
-        if (document.activeElement !== input) {
-          try { input.focus({ preventScroll: true }); } catch (e) { /* 忽略 */ }
-        }
-      }, 280);
+      if (input.value === Views.state.search.q) return;
+      await Views.setSearchQuery(input.value);
+      /* 跳到查询页后保持焦点，继续输入不中断 */
+      if (document.activeElement !== input) {
+        try { input.focus({ preventScroll: true }); } catch (e) { /* 忽略 */ }
+      }
+    }
+
+    input.addEventListener('compositionstart', function () { composing = true; });
+    input.addEventListener('compositionend', function () {
+      composing = false;
+      clearTimeout(timer);
+      timer = setTimeout(fire, 60);
+    });
+    input.addEventListener('input', function (e) {
+      if (clearBtn) clearBtn.hidden = !input.value;
+      if (composing || (e && e.isComposing)) return;
+      clearTimeout(timer);
+      timer = setTimeout(fire, 200);
     });
     input.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') {
@@ -401,49 +415,23 @@
     } catch (e) { /* 后台任务失败静默 */ }
   }
 
-  /* 光标聚光灯：背景层里的一团柔光跟着指针走。
-     只写一次 transform，走合成器；不改 CSS 变量，避免整棵树重算样式。
-     触屏上抬手 900ms 后淡出，不长期占用一层发光。 */
-  function bindSkyLight() {
-    const el = document.getElementById('skyLight');
-    if (!el) return;
-    const R = 280;
-    let raf = 0, x = 0, y = 0, timer = 0;
-    function apply() {
-      raf = 0;
-      el.style.transform = 'translate3d(' + Math.round(x - R) + 'px,' + Math.round(y - R) + 'px,0)';
-    }
-    function move(e) {
-      const p = e.touches && e.touches.length ? e.touches[0] : e;
-      if (!p || typeof p.clientX !== 'number') return;
-      x = p.clientX;
-      y = p.clientY;
-      if (!el.classList.contains('on')) el.classList.add('on');
-      if (!raf) raf = requestAnimationFrame(apply);
-      if (e.pointerType && e.pointerType !== 'mouse') {
-        clearTimeout(timer);
-        timer = setTimeout(function () { el.classList.remove('on'); }, 900);
-      }
-    }
-    function hide() {
-      clearTimeout(timer);
-      el.classList.remove('on');
-    }
-    window.addEventListener('pointermove', move, { passive: true });
-    window.addEventListener('pointerdown', move, { passive: true });
-    document.addEventListener('mouseleave', hide);
-    window.addEventListener('blur', hide);
-  }
+  /* 光标聚光灯：v2.41 起移除。
+     背景已改成一张静止位图，任何跟随指针的位移都会让「背景静止」这个前提失效，
+     而且它是屏幕上一块额外的 280px 发光层，低端机上白占一层显存。 */
 
-  /* 雨雪 / 云层视差：指针位置换算成 -1..1 写进 .sky 的 --wx / --wy，
-     雨丝、雪花、三层云各按远近乘不同幅度偏移。写在天空根节点上，
-     子层直接继承，一次 rAF 一帧，真正动的只是合成器里的 translate。
-     云层取负号（与指针反向），近层 4px、远层 2px，天空就有纵深。 */
+  /* 雨雪视差：指针位置换算成 -1..1 写进 .sky 的 --wx / --wy，
+     雨丝、雪花按远近乘不同幅度偏移。
+     v2.41：云层不再吃这套变量，只有 rain / snow 两态才真正写值 ——
+     晴阴两态下鼠标移动不会触发天空层任何样式重算。 */
   function bindSkyParallax() {
     const el = document.getElementById('sky');
     if (!el) return;
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     let raf = 0, tx = 0, ty = 0;
+    function wet() {
+      const w = document.documentElement.getAttribute('data-weather');
+      return w === 'rain' || w === 'snow';
+    }
     function apply() {
       raf = 0;
       el.style.setProperty('--wx', tx.toFixed(3));
@@ -451,6 +439,7 @@
     }
     function put() { if (!raf) raf = requestAnimationFrame(apply); }
     function move(e) {
+      if (!wet()) return;
       if (!e || typeof e.clientX !== 'number' || !window.innerWidth || !window.innerHeight) return;
       tx = (e.clientX / window.innerWidth) * 2 - 1;
       ty = (e.clientY / window.innerHeight) * 2 - 1;
@@ -491,22 +480,9 @@
     }, { passive: true });
   }
 
-  /* 时段标记：影子长度按太阳高度走（早长 → 正午短 → 傍晚再拉长），
-     只写一个 data-daypart，天空层用 CSS 变量接住，十分钟校一次。 */
-  function daypartOf(h) {
-    if (h >= 5 && h < 9) return 'morning';
-    if (h >= 9 && h < 14) return 'midday';
-    if (h >= 14 && h < 17) return 'afternoon';
-    if (h >= 17 && h < 20) return 'evening';
-    return 'night';
-  }
-
-  function markDaypart() {
-    const root = document.documentElement;
-    const put = function () { root.setAttribute('data-daypart', daypartOf(new Date().getHours())); };
-    put();
-    setInterval(put, 10 * 60 * 1000);
-  }
+  /* 时段标记：v2.41 起移除。
+     它只为云影长度服务，云影已经随三层云一起退场，留着只是每十分钟改一次
+     :root 属性、触发一次全站样式重算。 */
 
   /* 按下水晶按键的触感：手机端给 8ms 轻振，桌面端浏览器没有 vibrate，自然为空 */
   let hapticsOn = true;
@@ -525,10 +501,8 @@
   }
 
   async function boot() {
-    bindSkyLight();
     bindSkyParallax();
     bindSkyFreeze();
-    markDaypart();
     bindHaptics();
     try {
       hapticsOn = (await DB.getSetting('haptics', true)) !== false;
@@ -664,6 +638,8 @@
     refresh: async function () {
       await Views.refresh();
       updateEventsAlerts(false);
+      /* 查看器开着时改的文件信息，标题同步过来 */
+      if (window.Viewer && Viewer.refreshHeader) Viewer.refreshHeader();
     }
   };
 

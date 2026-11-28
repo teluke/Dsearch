@@ -11,7 +11,7 @@
     records: { filter: 'all', visible: 80 },
     stats: { seriesId: null },
     events: { seriesId: null, seg: 'cycle', visible: 100 },
-    search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [] },
+    search: { q: '', seriesId: null, ext: null, filterWords: [], activeFilters: [], limit: 60 },
     home: { day: '' },
     schedule: { docIds: [], keywords: [], week: 1, courses: {}, useAuto: true, previewId: null, objUrl: null, seriesName: '课表', fieldKeywords: {}, activeKeywords: [], day: null, viewWeek: null, folds: { kw: false, week: false } },
     loaded: false,
@@ -27,6 +27,10 @@
   };
 
   const KIND_LABEL = { doc: '文档', sheet: '表格', pdf: 'PDF', image: '图片', other: '文件' };
+
+  /* 搜索结果一次最多画多少行：几百条命中时整表塞进 innerHTML 会卡死主线程，
+     而用户实际只看最前面几十条。超出的给一个「还有 N 条」按钮点开。 */
+  const SEARCH_PAGE = 60;
 
   /* 全局搜索栏清空按钮的显隐 */
   function syncGlobalClear() {
@@ -2521,7 +2525,10 @@
       return title + filterBarHtml() +
         emptyBlock('筛选后没有剩余结果', '点筛选词右上角的 × 取消条件，或再换一个词试试');
     }
-    const rows = list.map(function (r) {
+    /* v2.41：一次最多画 SEARCH_PAGE 行。命中几百条时把整张表塞进 innerHTML
+       会卡住主线程好几百毫秒，而用户其实只看前几十条。 */
+    const shown = list.slice(0, state.search.limit || SEARCH_PAGE);
+    const rows = shown.map(function (r) {
       const d = r.doc;
       const sn = seriesName(d.seriesId);
       const hitLabel = r.hit === 'text' ? '<span class="badge">全文</span>'
@@ -2536,10 +2543,15 @@
         '<td class="name" style="max-width:260px">' + markSnippet(r.snippet || (r.hit === 'name' ? '文件名命中' : '—'), q) + '</td>' +
         '</tr>';
     }).join('');
+    const more = list.length > shown.length
+      ? '<div class="fold-more"><button class="btn sm ghost" data-search-more type="button">还有 ' +
+        (list.length - shown.length) + ' 条，点这里一次看全</button></div>'
+      : '';
     return title + filterBarHtml() +
       '<div class="inline-hint" style="margin:0 2px 8px">点任意一行，直接打开文件并定位到关键词位置' +
       (fs.length ? '；当前筛选：' + esc(fs.join(' + ')) : '') + '</div>' +
-      '<div class="table-wrap"><table class="grid"><thead><tr><th>文件名</th><th>文件日期</th><th>系列</th><th>命中内容</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+      '<div class="table-wrap"><table class="grid"><thead><tr><th>文件名</th><th>文件日期</th><th>系列</th><th>命中内容</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      more;
   }
 
   /* 选中系列后，在筛选条下面直接列出该系列的文件，不用先输关键词 */
@@ -2592,56 +2604,128 @@
       '<div class="chip-scroll" style="margin-top:8px"><div class="chips" data-chips><span class="chip-bg"></span>' + typeChips + '</div></div>' +
       seriesDocPanelHtml() +
       '<div id="searchResults" style="margin-top:6px">' + searchResultsHtml() + '</div>' +
-      kwCardHtml();
+      '<div class="kw-block" id="kwSlot"><div class="kw-skeleton" aria-hidden="true"></div></div>';
   }
 
-  /* 内容关键词关联表：从主页搬来查询页，主页那块位置让给当日课表 */
+  /* 内容关键词关联表：从主页搬来查询页，主页那块位置让给当日课表。
+     这块是整页里最重的计算（全部文档跑一遍中文 2~4 字滑窗 + 词频统计），
+     而它只跟文档集有关、跟搜索词无关 —— v2.41 起按文档指纹缓存，
+     打字时不再跟着每敲一个字重算一遍。 */
+  let kwCacheKey = '';
+  let kwCacheHtml = '';
+
+  function docsFingerprint() {
+    const docs = state.docs || [];
+    let sum = docs.length;
+    for (let i = 0; i < docs.length; i++) {
+      const d = docs[i];
+      sum += (d.updatedAt || 0) % 100000 + (d.fullText ? d.fullText.length : 0);
+    }
+    return sum + ':' + docs.length + ':' + (state.kwPinned || []).join(',');
+  }
+
   function kwCardHtml() {
+    const key = docsFingerprint();
+    if (key === kwCacheKey) return kwCacheHtml;
     try {
       const kw = Keywords.build(state.docs, { title: '内容关键词关联', pinned: state.kwPinned || [] });
-      return kw && kw.html ? '<div class="kw-block">' + kw.html + '</div>' : '';
-    } catch (e) { return ''; }
+      kwCacheHtml = kw && kw.html ? '<div class="kw-block">' + kw.html + '</div>' : '';
+    } catch (e) { kwCacheHtml = ''; }
+    kwCacheKey = key;
+    return kwCacheHtml;
   }
 
-  /* 信息查询页自带的输入框：顶栏搜索栏不在这页出现了，输入逻辑保持一致 */
+  /* 关键词关联表：先占位、后填充。
+     这块是整页最重的计算（180 份文档实测 380ms），同步算会把切页卡住，
+     而它只跟文档集有关、跟搜索词无关。v2.41 起先渲染一块占位，
+     浏览器空闲时算完再替换进去 —— 切页立刻响应，表格随后出现。 */
+  function mountKwCard(section) {
+    const slot = section && section.querySelector('#kwSlot');
+    if (!slot) return;
+    const run = function () {
+      if (!slot.isConnected) return;
+      const html = kwCardHtml();
+      if (html) slot.outerHTML = html;
+      else slot.remove();
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 800 });
+    else setTimeout(run, 60);
+  }
+
+  /* 信息查询页自带的输入框：顶栏搜索栏不在这页出现了，输入逻辑保持一致。
+     v2.41 两条关键改动：
+       1. 输入法组字期间（拼音还没上屏）一律不检索，否则一次中文输入会连打
+          三次全库搜索，主线程被占满，候选字直接卡在拼音状态；
+       2. 检索完只换「匹配结果」这一块，不再重建整页 —— 输入框不会被替换掉，
+          也就不会失焦、不会打断输入法、不会重跑关键词关联表。 */
   function bindPageSearch(section) {
     const input = section.querySelector('#pageSearch');
     if (!input) return;
     let timer = null;
-    const after = function () {
-      const next = document.querySelector('#view-search #pageSearch');
-      if (next && document.activeElement !== next) {
-        try { next.focus({ preventScroll: true }); } catch (e) { /* 忽略 */ }
-        next.setSelectionRange(next.value.length, next.value.length);
-      }
-    };
-    input.addEventListener('input', function () {
+    let composing = false;
+
+    async function fire() {
       clearTimeout(timer);
-      timer = setTimeout(async function () {
-        if (input.value === state.search.q) return;
-        await setSearchQuery(input.value);
-        after();
-      }, 280);
+      if (input.value === state.search.q) return;
+      await setSearchQuery(input.value);
+      /* 结果区重绘不会动输入框本身，正常情况下焦点一直在，这里只兜底 */
+      if (document.activeElement !== input) {
+        try { input.focus({ preventScroll: true }); } catch (e) { /* 忽略 */ }
+      }
+    }
+    function schedule(delay) {
+      clearTimeout(timer);
+      timer = setTimeout(fire, delay == null ? 200 : delay);
+    }
+
+    input.addEventListener('compositionstart', function () { composing = true; });
+    input.addEventListener('compositionend', function () {
+      composing = false;
+      schedule(60);
+    });
+    input.addEventListener('input', function (e) {
+      /* isComposing 在老浏览器上可能缺，两个信号都要认 */
+      if (composing || (e && e.isComposing)) return;
+      schedule();
     });
     input.addEventListener('keydown', function (e) {
-      if (e.key !== 'Enter') return;
+      if (e.key !== 'Enter' || composing) return;
       e.preventDefault();
-      clearTimeout(timer);
-      setSearchQuery(input.value).then(after);
+      fire();
     });
   }
 
-  /* 外部（全局搜索栏 / 关键词关联表）设置关键词 */
+  /* 外部（全局搜索栏 / 关键词关联表）设置关键词。
+     v2.41：已经在查询页时只刷结果区，不整页重建。 */
   async function setSearchQuery(q) {
     const next = q || '';
     /* 换了搜索词就清掉上一轮叠加的筛选，避免旧条件把新结果筛空 */
-    if (next.trim() !== state.search.q.trim()) state.search.activeFilters = [];
+    if (next.trim() !== state.search.q.trim()) {
+      state.search.activeFilters = [];
+      state.search.limit = SEARCH_PAGE;
+    }
     state.search.q = next;
     if (state.tab !== 'search') {
       await window.App.switchTab('search', true);
     } else {
-      await render('search');
+      await refreshSearchOnly();
     }
+  }
+
+  /* 只重跑检索 + 换结果区 + 更新顶部那句提示，页面骨架一个节点都不动 */
+  async function refreshSearchOnly() {
+    updateSearchMeta();
+    await runSearch();
+    refreshSearchResults();
+  }
+
+  function updateSearchMeta() {
+    const meta = document.querySelector('#view-search .topbar .meta');
+    if (!meta) return;
+    const q = state.search.q.trim();
+    meta.innerHTML = q
+      ? '正在检索「' + esc(q) + '」· 关键词检索文件名、字段、正文与图片文字'
+      : '输入关键词，检索文件名、字段、正文与图片文字';
   }
 
   /* 只刷新「匹配结果」这一块：筛选词开关不用重跑数据库查询，也不打乱滚动位置 */
@@ -3317,7 +3401,7 @@
       '可以把识别文字单独清除，也可以随文件一起删除。识别过程不联网，不会把照片传给任何第三方。</div>', folds.security === true) +
 
       '<div class="section-title"><span>关于</span></div>' +
-      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.40.0') + ' · 数据不上传，无账号，无云端。' +
+      '<div class="notice info">工作文件 · 本地档案版 v' + esc(window.APP_VERSION || '2.41.0') + ' · 数据不上传，无账号，无云端。' +
       '<br>可添加到手机主屏幕，像应用一样全屏使用。</div>';
   }
 
@@ -4647,6 +4731,7 @@
       mountSchedulePreview(section);
     } else if (state.tab === 'search') {
       bindPageSearch(section);
+      mountKwCard(section);
     }
   }
 
@@ -4821,6 +4906,13 @@
         const id = parseInt(hideBtn.getAttribute('data-hide-doc'), 10);
         if (toggleHidden(id)) UI.toast('已屏蔽，搜索结果里不再显示；文件还在，可在「已屏蔽」里恢复', 'ok');
         else UI.toast('已恢复显示', 'ok');
+        refreshSearchResults();
+        return;
+      }
+
+      /* 结果超过一屏上限时点「还有 N 条」：一次性放到全量 */
+      if (e.target.closest('[data-search-more]')) {
+        state.search.limit = Infinity;
         refreshSearchResults();
         return;
       }

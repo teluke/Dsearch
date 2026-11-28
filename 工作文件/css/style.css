@@ -3824,6 +3824,23 @@ select.input { background-color: rgba(255, 255, 255, .9); }
 /* 关键词关联表搬到信息查询页后，与结果区留出间距 */
 .kw-block { margin-top: 24px; }
 
+/* v2.41 关键词关联表的占位骨架：这块要遍历全部正文，算完才替换进来，
+   先摆一块同高度的淡色块，避免内容忽然"顶"下来或者整页空一块 */
+.kw-skeleton {
+  height: 148px;
+  border-radius: 14px;
+  background: linear-gradient(100deg, rgba(255, 255, 255, .30) 0%, rgba(255, 255, 255, .52) 42%, rgba(255, 255, 255, .30) 78%);
+  background-size: 220% 100%;
+  animation: kwSkeleton 1.35s ease-in-out infinite;
+}
+@keyframes kwSkeleton {
+  0% { background-position: 120% 0; }
+  100% { background-position: -40% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kw-skeleton { animation: none; background: rgba(255, 255, 255, .38); }
+}
+
 /* ==========================================================================
    v2.31.0 字号分级 / 顺滑切换
    桌面放大常用正文；手机保持紧凑但把过小的辅助文字抬到可读下限。

@@ -9,7 +9,7 @@
   let hitState = { marks: [], pages: [], idx: 0, query: '' };
   let panTarget = null;
 
-  const el = { root: null, body: null, name: null, meta: null, icon: null, external: null,
+  const el = { root: null, body: null, name: null, meta: null, icon: null, external: null, edit: null,
     hits: null, hitPrev: null, hitNext: null, hitCount: null, hitClose: null,
     pan: null, panRange: null, zoom: null, zoomRange: null };
 
@@ -20,6 +20,7 @@
     el.meta = document.getElementById('viewerMeta');
     el.icon = document.getElementById('viewerIcon');
     el.external = document.getElementById('viewerExternal');
+    el.edit = document.getElementById('viewerEdit');
     el.hits = document.getElementById('viewerHits');
     el.hitPrev = document.getElementById('hitPrev');
     el.hitNext = document.getElementById('hitNext');
@@ -926,6 +927,17 @@
     if (el.external) {
       el.external.addEventListener('click', function () { externalOpen(); });
     }
+    /* v2.41：查看器里直接改文件信息。以前要从归档列表找到这份文件、
+       进详情才能改，看到内容不对时得来回跳。 */
+    if (el.edit) {
+      el.edit.addEventListener('click', async function () {
+        if (!currentDoc) return;
+        const fresh = window.DB ? await DB.getDocument(currentDoc.id) : currentDoc;
+        if (!fresh) { UI.toast('这份文件已被删除'); return; }
+        if (window.Views && Views.openDocForm) Views.openDocForm(fresh, 'edit');
+        else UI.toast('编辑面板未加载');
+      });
+    }
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && el.root.classList.contains('open')) close();
     });
@@ -933,9 +945,23 @@
 
   bindOnce();
 
+  /* 从查看器里的「编辑」改完名字 / 日期 / 字段后，抽屉会走 App.refresh()，
+     顺手把查看器顶部的文件名同步过来，不用关掉重开 */
+  async function refreshHeader() {
+    if (!el.root || !el.root.classList.contains('open') || !currentDoc) return;
+    try {
+      const fresh = await DB.getDocument(currentDoc.id);
+      if (!fresh) return;
+      currentDoc = Object.assign({}, currentDoc, { name: fresh.name, fileDate: fresh.fileDate, fields: fresh.fields });
+      if (el.name) el.name.textContent = fresh.name || '';
+    } catch (e) { /* 忽略 */ }
+  }
+
   window.Viewer = {
     open: open,
     close: close,
-    externalOpen: externalOpen
+    externalOpen: externalOpen,
+    refreshHeader: refreshHeader,
+    isOpen: function () { return !!(el.root && el.root.classList.contains('open')); }
   };
 })();

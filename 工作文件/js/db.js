@@ -207,6 +207,37 @@
     return (start > 0 ? '…' : '') + text.slice(start, end).replace(/\s+/g, ' ') + (end < text.length ? '…' : '');
   }
 
+  /* 检索用小写索引：文档的 name / fields / fullText / ocrText 全文 toLowerCase()
+     是最贵的一步（一份几十页的 PDF 正文就是几十万字符），而它在每次按键时都会被
+     重算一遍。v2.41 起按文档 id 缓存小写结果，指纹用 updatedAt + 三个字段的长度，
+     正文变化（重新提取 / OCR 完成）会自动失效。 */
+  const lowCache = new Map();
+
+  function lowIndex(d) {
+    const stamp = (d.updatedAt || 0) + '|' + (d.name || '').length + '|' +
+      (d.fullText || '').length + '|' + (d.ocrText || '').length + '|' +
+      (d.fields ? Object.keys(d.fields).length : 0);
+    const hit = lowCache.get(d.id);
+    if (hit && hit.stamp === stamp) return hit;
+    const fieldText = Object.keys(d.fields || {})
+      .map(k => String(d.fields[k] == null ? '' : d.fields[k])).join(' ');
+    const rec = {
+      stamp: stamp,
+      fields: fieldText,
+      name: (d.name || '').toLowerCase(),
+      fieldsLow: fieldText.toLowerCase(),
+      text: (d.fullText || '').toLowerCase(),
+      ocr: (d.ocrText || '').toLowerCase()
+    };
+    lowCache.set(d.id, rec);
+    return rec;
+  }
+
+  function pruneLowCache(aliveIds) {
+    if (lowCache.size <= aliveIds.size + 40) return;
+    lowCache.forEach((v, k) => { if (!aliveIds.has(k)) lowCache.delete(k); });
+  }
+
   async function searchDocuments(opts) {
     const q = (opts.q || '').trim();
     const kw = q.toLowerCase();
@@ -215,20 +246,23 @@
     if (opts.ext) rows = rows.filter(d => kindOfExt(d.ext) === opts.ext);
 
     const results = [];
+    const alive = new Set();
     rows.forEach(d => {
-      const fieldText = Object.keys(d.fields || {}).map(k => String(d.fields[k] == null ? '' : d.fields[k])).join(' ');
-      const inName = (d.name || '').toLowerCase().indexOf(kw) >= 0;
-      const inFields = fieldText.toLowerCase().indexOf(kw) >= 0;
-      const inText = (d.fullText || '').toLowerCase().indexOf(kw) >= 0;
-      const inOcr = (d.ocrText || '').toLowerCase().indexOf(kw) >= 0;
+      alive.add(d.id);
+      const ix = lowIndex(d);
+      const inName = ix.name.indexOf(kw) >= 0;
+      const inFields = ix.fieldsLow.indexOf(kw) >= 0;
+      const inText = ix.text.indexOf(kw) >= 0;
+      const inOcr = ix.ocr.indexOf(kw) >= 0;
       if (!kw || inName || inFields || inText || inOcr) {
         const hit = inText ? 'text' : (inOcr ? 'ocr' : (inFields ? 'fields' : (inName ? 'name' : 'all')));
         const snippet = inText ? summaryOf(d.fullText, q)
           : (inOcr ? summaryOf(d.ocrText, q)
-            : (inFields ? summaryOf(fieldText, q) : ''));
+            : (inFields ? summaryOf(ix.fields, q) : ''));
         results.push({ doc: d, hit: hit, snippet: snippet });
       }
     });
+    pruneLowCache(alive);
 
     results.sort((a, b) => compareDocs(a.doc, b.doc, 'fileDate'));
     return results;

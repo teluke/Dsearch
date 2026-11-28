@@ -17,6 +17,17 @@
     return false;
   }
 
+  /* 参与候选词提取的正文上限：一份几十页的 PDF 正文能有几十万字符，
+     对它做 2~4 字滑窗是纯主线程的几百万次循环。关键词关联看的是高频词，
+     前 4000 字足够代表性，v2.41 起按此截断，计算量降一个数量级。
+     命中份数与上下文摘录仍然基于全文，结果不变。 */
+  const CAND_CHARS = 1200;
+
+  function clipForCand(t) {
+    const s = String(t || '');
+    return s.length > CAND_CHARS ? s.slice(0, CAND_CHARS) : s;
+  }
+
   /* 提取候选词：中文 2~4 字滑窗 + 4 位以上英文字母词 */
   function candidates(text, add) {
     const cjkSegs = String(text || '').match(/[\u4e00-\u9fa5]{2,}/g) || [];
@@ -99,7 +110,7 @@
     const freq = {};
     rows.forEach(function (r) {
       const seen = {};
-      candidates(r.body, function (w) {
+      candidates(clipForCand(r.body), function (w) {
         if (seen[w]) return;
         seen[w] = 1;
         freq[w] = (freq[w] || 0) + 1;
@@ -160,7 +171,7 @@
       const freq = {};
       withText.forEach(function (d) {
         const seen = {};
-        candidates(bodyOf(d), function (w) {
+        candidates(clipForCand(bodyOf(d)), function (w) {
           if (seen[w]) return;
           seen[w] = 1;
           freq[w] = (freq[w] || 0) + 1;
