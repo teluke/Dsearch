@@ -1,6 +1,6 @@
 /* Service Worker：应用壳缓存，离线可用 */
 
-const CACHE = 'gongzuowenjian-v84';
+const CACHE = 'gongzuowenjian-v85';
 
 /* js/css 经常随版本更新，走网络优先，避免两端版本不一致导致同步配对失败；
    离线时回退到缓存，离线可用性不受影响 */
@@ -36,6 +36,7 @@ const ASSETS = [
   './vendor/jsqr.min.js',
   './vendor/tesseract/tesseract.min.js',
   './assets/sky/clouds-m-still.webp',
+  './assets/sky/clouds-t-still.webp',
   './assets/icon-192.png',
   './assets/icon-512.png',
   './assets/fonts/ui-handwriting-subset.woff2'

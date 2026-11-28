@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-28 12:40 ｜ 当前版本：**v2.39.0** ｜ 缓存：`gongzuowenjian-v84`
+> 最后更新：2026-11-28 14:20 ｜ 当前版本：**v2.40.0** ｜ 缓存：`gongzuowenjian-v85`
 
 ---
 
@@ -52,9 +52,9 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.39.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.39.0`
-- SW 缓存 `gongzuowenjian-v84`，清单已含 `./css/sky.css`、`./js/weather.js`、`./assets/sky/clouds-m-still.webp`
-- Git：tag `v2.39.0`（commit 待补），已推 `origin/main`，Pages 已生效（线上验收见 `.workbuddy/pw/_live-v239.js`）
+- 版本 `APP_VERSION = '2.40.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.40.0`
+- SW 缓存 `gongzuowenjian-v85`，清单已含 `./css/sky.css`、`./js/weather.js`、`./assets/sky/clouds-m-still.webp`、`./assets/sky/clouds-t-still.webp`
+- Git：tag `v2.40.0`（commit 待补），已推 `origin/main`，Pages 已生效（线上验收见 `.workbuddy/pw/_live-v240.js`）
 - 工作区干净，无未提交改动
 
 ---
@@ -109,22 +109,29 @@ node server.js                      # 静态服务，端口 5173
 
 `--tile-w / --tile-h`：桌面 `1600px / 900px`，窄屏 `760px / 427.5px`（`@media` 覆盖）。**高度必须按瓦片比例算**，用容器百分比会把小狗纵向压扁（v2.33 修掉）。
 
-三层落位 `--cloud-top`：桌面 `-300 / -130 / 75px`，窄屏 `10 / 50 / 108px`（远→近），按瓦片内云体 y 偏移 560/330/60 反推，保证手机端云体最上方低于顶栏下缘。
+三层落位（v2.40 起 `--cloud-top` 全部取消，`top: 0`，屏幕位置直接等于瓦片内坐标）：近层 y=132、中层 212、远层 262，云体最上沿 134px，稳在顶栏下缘（约 121px）之下。
 
-**云层视差（v2.30）**：`--wx` / `--wy` 现在写在 `.sky` 根节点（`#sky`）上，子层继承。`.sky-clouds .c3/.c2/.c1` 用独立的 `translate` 属性反向偏 2 / 3 / 4px，漂移仍走 `transform`，两者不抢。
+**云层视差（v2.30）**：`--wx` / `--wy` 现在写在 `.sky` 根节点（`#sky`）上，子层继承。`.sky-clouds .c3/.c2/.c1` 用独立的 `translate` 属性反向偏 2 / 3 / 4px。v2.40 起漂移的 `transform` 在容器上、视差的 `translate` 在子元素上，两条通道彻底分开，互不覆盖。
 
 **云影同步（v2.31）**：`.sky-shadows .c3/.c2/.c1` 的 `translate` 在光源偏移后再加同一份 `--wx/--wy` 视差，过渡统一 `.16s`。
 
 **上下浮动（v2.33 / v2.34 / v2.36）**：`@property` 注册 `--float-c1/c2/c3`，48/62/76s linear 循环改值（±5/±4/±3px，单周期 `-N → +N → -N`，两端不停顿）。v2.36 起动画挂在新增的 `.sky-float` 容器（包住云与影），**不再挂在 `.sky`**——背景底图本身 `animation: none`，滚动时不会因整棵背景子树每帧重算样式而闪一下。云与影的 `translate` 末尾加同一份 `var(--float-cN)`，所以永远同步；低动效下 `.sky-float` 动画整体关闭。
 
-**小狗云（v2.32 / v2.33 / v2.37）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，每层两份、边缘 alpha 全 0 才能无缝循环。v2.33 起按瓦片原比例铺图并下移落位，桌面透明度再压一档。v2.37 把远层 placements 从 x300/x1000 改到 x940/x1350——原来 x300 的歪头狗整只被近层吐舌狗（x180–540）盖住，现在首屏三朵 x 区间 180–540 / 600–900 / 940–1130 互不重叠。改云只改脚本再重跑，不要手改 `sky.css`。
+**小狗云（v2.32 / v2.33 / v2.37 / v2.40）**：`make-sky2.py` 不再画 SVG 云，改为 import `.workbuddy/tmp/puppy_cloud_assets.py`。后者从 `.workbuddy/tmp/source/puppy-clouds.jpg`（用户提供的原图，不入库）本地抠出三朵云，烘焙 9 张无损 WebP 瓦片内嵌 `sky.css`。近层=吐舌、中层=眯眼、远层=歪头，边缘 alpha 全 0 才能无缝循环。改云只改脚本再重跑，不要手改 `sky.css`。
 
-**手机端单张静态图（v2.39）**：`≤700px` 时 `.sky-clouds / .sky-shadows / .sky-float` 全部 `display: none`，改由 `.sky-m > img` 提供云层——一张 `assets/sky/clouds-m-still.webp`（800×450、29KB）。**没有任何动画**：无 `animation`、无 `will-change`、无 `transform`/`translate`，合成层只有一张 800 宽纹理（DPR3 下 2400×1350），零解码开销。天气态仍是 `.32 / .25 / 0`。`<picture>` + `source[media]` 保证桌面不下载这张图。v2.38 曾用过 1600×450 的 40 帧动画 WebP + 平移，实测解码和纹理内存更吃紧，v2.39 退回静止。
+> **⚠ v2.40 的核心约束：三层必须同速**
+> 以前三层各走 285 / 400 / 540s，位移差随时间累积，跑几小时后三朵必然错位叠在一起——调坐标只能把碰撞往后推。现在 `skyDrift` 挂在 `.sky-clouds` / `.sky-shadows` 容器上（420s 走完一个 1600px 瓦片），三层共用一个时钟，相对位置一格不差。**别再把 `animation` 加回 `.sky-cloud`**，否则互压会复发。
+> 排布：近层 x=90 与 1190 两份（w 360），中层 x=530 一份（w 300），远层 x=910 一份（w 190）。实测 alpha 区间 `92-447 / 532-827 / 911-1098 / 1192-1547`，两两间隔 84~94px。中远层各一份就够铺满一屏；加上去会挤，`audit-v240.js` 的跨层区间比对会报重叠。
 
-> **⚠ 手机云图别改回 `background-image`**：平铺接缝正是当初闪烁的来源；Safari 也不给 CSS 背景播放 WebP 动画。必须留在 `<img>` 里。
-> **⚠ 想改回动的**：`make-cloud-anim.py` 仍在，跑一次会同时产出 `clouds-m.webp`（动画）和 `clouds-m-still.webp`（静态首帧），改 `LAYERS` 调位置/幅度/相位/层 alpha。
+**移动端单张静态图（v2.39 / v2.40）**：`≤1200px` 时 `.sky-clouds / .sky-shadows / .sky-float` 全部 `display: none`，改由 `.sky-m > img` 提供云层。**没有任何动画**：无 `animation`、无 `will-change`、无 `transform`/`translate`，零解码开销。天气态仍是 `.32 / .25 / 0`。
+- `≤700px`：`assets/sky/clouds-m-still.webp`，800×450 / 29KB，1:1 铺、`left: 0`、`top: 110px`（只露出左边一段，与 v2.39 完全一致）
+- `701~1200px`：`assets/sky/clouds-t-still.webp`，1200×675 / 46KB，`width: 100%; height: auto; top: 100px` 按视口宽等比铺满；图内三朵纵向分层（y 区间 `36-292 / 310-509 / 529-670`），互不遮挡
+`<picture>` + 两条 `source[media]` 分档，桌面匹配不上时走 1px 占位、**不下载这两张图**。v2.38 曾用过 1600×450 的 40 帧动画 WebP + 平移，实测解码和纹理内存更吃紧，v2.39 退回静止。
 
-**滚动冻结（v2.37）**：`app.js` 的 `bindSkyFreeze()` 监听 `scroll`（capture，含内部滚动容器）/ `touchmove` / `wheel` / `touchend`，滚动时给 `html` 加 `.sky-scrolling`，停手 180ms 后移除。`sky.css` 里对应规则把 `.sky-float`、三层 `.sky-cloud`、`.sky-precip i` 和两条明暗伪元素的 `animation-play-state` 设成 `paused !important`。只暂停、不重置：动画停在当前时刻，恢复后从原处继续，云不跳帧；视差 `--wx/--wy` 仍照常更新。切此方案是用户从「冻结 / 单张动画图 / 只烘云层」里选的 A，若仍闪再走云层动画图那条路。
+> **⚠ 云图别改回 `background-image`**：平铺接缝正是当初闪烁的来源；Safari 也不给 CSS 背景播放 WebP 动画。必须留在 `<img>` 里。
+> **⚠ 改尺寸就改脚本**：`make-cloud-anim.py` 里 `SPECS` 两档（手机 800×450 `stacked=False`、平板 1200×675 `stacked=True`，`stacked` 会断言三朵纵向不重叠），改坐标/宽度后重跑即可，别手改 webp。
+
+**滚动冻结（v2.37）**：`app.js` 的 `bindSkyFreeze()` 监听 `scroll`（capture，含内部滚动容器）/ `touchmove` / `wheel` / `touchend`，滚动时给 `html` 加 `.sky-scrolling`，停手 180ms 后移除。`sky.css` 里对应规则把 `.sky-clouds`、`.sky-shadows`（v2.40 起漂移挂在这两个容器上）、`.sky-float`、三层 `.sky-cloud`、`.sky-precip i` 和两条明暗伪元素的 `animation-play-state` 设成 `paused !important`。只暂停、不重置：动画停在当前时刻，恢复后从原处继续，云不跳帧；视差 `--wx/--wy` 仍照常更新。切此方案是用户从「冻结 / 单张动画图 / 只烘云层」里选的 A，若仍闪再走云层动画图那条路。
 
 > **⚠ 影层矩形**：高斯模糊前必须垫 110px 透明边，影层缩放必须用双线性 + alpha 截断；否则模糊/缩放会把 alpha 渗到整块矩形，叠在天空上就是淡蓝方块。
 > **⚠ 原图隐私**：`puppy-clouds.jpg` 只在本地 `.workbuddy/tmp/source/`，不要 `git add`。
