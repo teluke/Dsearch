@@ -1,7 +1,7 @@
 /* 应用启动、路由与全局交互 */
 
 (function () {
-  window.APP_VERSION = '2.41.0';
+  window.APP_VERSION = '2.42.0';
   const $ = UI.$;
   const $$ = UI.$$;
   const TABS = ['home', 'schedule', 'archive', 'records', 'stats', 'events', 'search', 'settings'];
@@ -364,16 +364,66 @@
     if (!('serviceWorker' in navigator)) return;
     if (location.protocol === 'file:') return;
     navigator.serviceWorker.register('sw.js').then(function (reg) {
-      /* 新版本 Service Worker 激活后提醒刷新，避免两端版本不一致 */
+      const bar = document.getElementById('updateBar');
+      const close = document.getElementById('updateBarClose');
+      let shown = false;
+      let lastCheck = 0;
+      /* 首次安装 SW 也会触发 controllerchange（clients.claim()），那不是更新。
+         页面加载时没有 controller 的话，第一次接管要跳过，否则新用户一进来就看到「发现新版本」。 */
+      let firstClaimHandled = !!navigator.serviceWorker.controller;
+
+      /* 只给用户一个可点的提示条，绝不自动 reload：
+         自动刷新会在输入法组字、表单填写、查看器浏览时把用户正在做的事清掉。 */
+      function offer() {
+        if (shown || !bar || !navigator.serviceWorker.controller) return;
+        shown = true;
+        bar.hidden = false;
+      }
+      function dismiss() {
+        shown = true;
+        if (bar) bar.hidden = true;
+      }
+
+      if (bar) {
+        bar.addEventListener('click', function (e) {
+          if (e.target && e.target.id === 'updateBarClose') return;
+          location.reload();
+        });
+      }
+      if (close) {
+        close.addEventListener('click', function (e) {
+          e.stopPropagation();
+          dismiss();
+        });
+      }
+
       reg.addEventListener('updatefound', function () {
         const nw = reg.installing;
         if (!nw) return;
         nw.addEventListener('statechange', function () {
-          if (nw.state === 'activated' && navigator.serviceWorker.controller && window.UI) {
-            UI.toast('应用已更新，建议刷新页面以启用最新功能', 'warn');
-          }
+          if (nw.state === 'installed') offer();
         });
       });
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!navigator.serviceWorker.controller) return;
+        if (!firstClaimHandled) { firstClaimHandled = true; return; }
+        offer();
+      });
+      if (reg.waiting) offer();
+
+      /* 浏览器自己决定何时检查 sw.js，最长可能拖一天。
+         这里在启动与每次回到前台时主动问一次，60 秒内不重复，避免频繁请求。 */
+      function check() {
+        const now = Date.now();
+        if (now - lastCheck < 60000) return;
+        lastCheck = now;
+        reg.update().catch(function () { /* 离线时忽略 */ });
+      }
+      window.addEventListener('focus', check);
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) check();
+      });
+      check();
     }).catch(function (err) {
       console.warn('[SW] 注册失败', err);
     });

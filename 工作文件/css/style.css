@@ -767,6 +767,42 @@ table.grid td.num { font-variant-numeric: tabular-nums; }
 .toast.ok { background: rgba(45, 154, 100, 0.95); }
 .toast.err { background: rgba(190, 76, 66, 0.95); }
 
+/* 新版本提示条：点整条刷新，右侧 × 只在本次会话忽略；不自动 reload，避免打断输入 */
+.update-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 200;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(100vw - 32px);
+  padding: 9px 10px 9px 15px;
+  border-radius: 999px;
+  background: var(--primary-2);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(86, 108, 158, 0.28);
+}
+.update-bar[hidden] { display: none; }
+.ub-dot { width: 6px; height: 6px; border-radius: 50%; background: #fff; flex: none; }
+.ub-text { white-space: nowrap; }
+.ub-close {
+  border: 0;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  line-height: 16px;
+  text-align: center;
+  font-size: 14px;
+  padding: 0;
+  flex: none;
+}
+
 /* 进度 */
 .progress {
   position: fixed;

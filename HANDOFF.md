@@ -1,7 +1,7 @@
 # 工作文件 · 项目交接文档（HANDOFF）
 
 > 用途：删掉对话后，从这个文件就能接上进度，不用重新问一遍。
-> 最后更新：2026-11-28 14:40 ｜ 当前版本：**v2.41.0** ｜ 缓存：`gongzuowenjian-v86`
+> 最后更新：2026-11-28 15:40 ｜ 当前版本：**v2.42.0** ｜ 缓存：`gongzuowenjian-v87`
 
 ---
 
@@ -44,7 +44,8 @@ node server.js                      # 静态服务，端口 5173
 | `.workbuddy/tmp/make-sky2.py` | 生成 sky.css 的脚本（421 行） |
 | `.workbuddy/pw/audit-*.js` | Playwright 审计脚本 |
 | `.workbuddy/shots/vNNN/` | 各版本验收截图 |
-| `.workbuddy/memory/*.md` | 按天的工作日志 |
+| `.workbuddy/memory/*.md` | 当日工作日志（旧日志已归档） |
+| `.workbuddy/archive/` | 瘦身前脱敏存档 + 归档的旧日志/截图/测试缓存（不入库） |
 | `VERSION.md` | 版本索引 + 每版变更明细 |
 | `docs/` | PRD / ARCHITECTURE / RESTORE（v2.2.1 基线） |
 
@@ -52,10 +53,10 @@ node server.js                      # 静态服务，端口 5173
 
 ## 3. 当前状态
 
-- 版本 `APP_VERSION = '2.41.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.41.0`
-- SW 缓存 `gongzuowenjian-v86`，清单已含三张云图：`./assets/sky/clouds-{m,t,d}-still.webp`
+- 版本 `APP_VERSION = '2.42.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.42.0`
+- SW 缓存 `gongzuowenjian-v87`，清单已含三张云图：`./assets/sky/clouds-{m,t,d}-still.webp`
 - `css/sky.css` 39KB（v2.40 时是 654KB，云图 base64 已全部移出）
-- Git：tag `v2.41.0`（commit `34cd636`），已推 `origin/main`，Pages 已生效（线上验收 30/0）
+- Git：tag `v2.42.0`，已推 `origin/main`
 - 工作区干净，无未提交改动
 
 ---
@@ -135,6 +136,14 @@ python .workbuddy/tmp/make-cloud-anim.py    # 输出 工作文件/assets/sky/*.w
 | `markDaypart()` / `data-daypart` | 云影按太阳高度调长 | 云影没了，留着只是每 10 分钟触发一次全站样式重算 |
 
 ## 5. 近期版本做了什么
+
+### v2.42.0 — 主动更新 / 可点提示条 / 脱敏存档 / 工作区归档
+1. SW 更新从「等浏览器自己查」改为「启动 + focus + 回前台主动 `reg.update()`」，60 秒节流
+2. 发现新版显示底部可点提示条，点整条才 reload，× 只本次会话忽略；**不自动刷新**，避免打断输入
+3. 瘦身前写脱敏存档 `.workbuddy/archive/现状存档-v2.41.0-20261128.md`（清单与统计，无正文/人名/IP）
+4. 旧日志、旧截图、浏览器测试缓存移入归档：活跃工作区 437MB → 31MB，归档 390MB，总占用不变；代码与 backups 未动
+5. `audit-v242.js` 14/14；其余有效审计全量回归见第 6 节
+
 
 ### v2.41.0 — 全端背景静止 / 贴图黑框 / 输入卡顿 / 查看器可编辑
 1. 桌面端背景改成一张静止云图 `clouds-d-still.webp`（2200×1240/124KB），删掉三层瓦片漂移、上下浮动、指针视差、光标聚光灯；`sky.css` 654KB → 39KB，合成层从 6 张 1600×900 纹理降到 1 张
@@ -239,6 +248,7 @@ node audit-v237.js
 
 | 脚本 | 项数 | 覆盖 |
 | --- | --- | --- |
+| `audit-v242.js` | 14 | 更新条默认隐藏、关闭不刷新、主动检查与节流、真实 SW 更新出条且输入不被清掉 |
 | `audit-v241.js` | 38 | 三档云图分档与零动画、贴图低 alpha 为浅色、首末行列透明、云顶在顶栏下、连切 8 页与滚动后背景几何不变、sky.css < 60KB 无内嵌云图、输入框不失焦、组字期间不检索、结果 60 行上限、查看器编辑入口 |
 | `audit-v237.js` | 20 | 滚动冻结全部天空动画、停手恢复不跳帧、桌面三云区间分离、手机端同样生效 |
 | `audit-v236.js` | 15 | 天空独立合成层、无白色光晕与顶栏模糊、浮动迁到 .sky-float、滑动无报错 |
@@ -312,6 +322,9 @@ node audit-v237.js
 15. **云层 placements 别 pairwise 靠得太近**：三层云宽 190~360px，同一瓦片里若两个 x 区间重叠，近层会把远层整只压住（v2.37 前歪头狗就这样）。新排布后要截图人工核对，区间分离不等于视觉不重叠（还要看 y 与瓦片内的实际狗体边界）。
 
 ---
+
+16. **沙箱会拦 `fs.rmSync`**：WorkBuddy 的 `node-safe-delete-shim` 在 `execFile` 子进程里会拦项目目录的递归删除，审计脚本里的 `fs.rmSync(PROFILE, {recursive:true})` 会直接抛错（单独跑反而因升级沙箱而通过，极具误导性）。改用 `fs.mkdtempSync(path.join(os.tmpdir(), 'wb-xxx-'))` 每次新建临时 profile，不要删项目目录。
+17. **Playwright `page.route('**/sw.js')` 拦不到 Service Worker 脚本请求**：调试时 `swHits=0`。要模拟线上发版，只能临时改写本地 `sw.js` 再在 `finally` 里恢复，并在测试里断言恢复成功。
 
 ## 8. 待做方向（下一轮候选，都没开工）
 
