@@ -54,7 +54,7 @@ node server.js                      # 静态服务，端口 5173
 
 - 版本 `APP_VERSION = '2.40.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.40.0`
 - SW 缓存 `gongzuowenjian-v85`，清单已含 `./css/sky.css`、`./js/weather.js`、`./assets/sky/clouds-m-still.webp`、`./assets/sky/clouds-t-still.webp`
-- Git：tag `v2.40.0`（commit 待补），已推 `origin/main`，Pages 已生效（线上验收见 `.workbuddy/pw/_live-v240.js`）
+- Git：tag `v2.40.0`（commit `8043274`），已推 `origin/main`，Pages 已生效（线上验收 23/0）
 - 工作区干净，无未提交改动
 
 ---
