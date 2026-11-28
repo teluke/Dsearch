@@ -56,7 +56,7 @@ node server.js                      # 静态服务，端口 5173
 - 版本 `APP_VERSION = '2.42.0'`（`js/app.js` 第 4 行），页脚 `工作文件 v2.42.0`
 - SW 缓存 `gongzuowenjian-v87`，清单已含三张云图：`./assets/sky/clouds-{m,t,d}-still.webp`
 - `css/sky.css` 39KB（v2.40 时是 654KB，云图 base64 已全部移出）
-- Git：tag `v2.42.0`，已推 `origin/main`
+- Git：tag `v2.42.0`（commit `832457d`），已推 `origin/main`，Pages 已生效（线上验收 34/0）
 - 工作区干净，无未提交改动
 
 ---
